@@ -619,7 +619,7 @@ LINK_KEYWORDS = ("http://", "https://", "t.me/")
 async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
-    message = update.effective_message
+    message = update.effective_message  # ✅ FIX
 
     if not chat or not user or not message:
         return
@@ -637,6 +637,10 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if member.status in ("administrator", "creator"):
             return
     except:
+        return
+
+    # ⚠️ supergroup only (Telegram restriction)
+    if chat.type != "supergroup":
         return
 
     now = int(time.time())
@@ -661,7 +665,7 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     job_conn.commit()
 
-    # 🚨 Limit reached → mute
+    # 🚨 Limit reached → mute (FIXED INDENT)
     if count >= LINK_LIMIT:
         until = now + MUTE_SECONDS
 
@@ -685,8 +689,6 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (chat.id, user.id)
         )
         job_conn.commit()
-
-
 
 # ===============================
 # MAIN
