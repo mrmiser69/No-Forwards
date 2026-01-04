@@ -250,7 +250,12 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
-    text = (message.text or message.caption or "").lower()
+    text = (
+    message.text
+    or message.caption
+    or message.link_preview and message.link_preview.url
+    or ""
+    ).lower()
     if not text:
         return
 
@@ -627,7 +632,12 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ("group", "supergroup"):
         return
 
-    text = (message.text or message.caption or "").lower()
+    text = (
+    message.text
+    or message.caption
+    or message.link_preview and message.link_preview.url
+    or ""
+    ).lower()
     if not any(k in text for k in LINK_KEYWORDS):
         return
 
