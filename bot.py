@@ -4,14 +4,14 @@
 import os
 import sqlite3
 import time
-from datetime import timedelta
 import asyncio
+from datetime import timedelta
 
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ChatPermissions   # ✅ FIX HERE
+    ChatPermissions
 )
 
 from telegram.ext import (
@@ -25,9 +25,27 @@ from telegram.ext import (
 )
 
 # ===============================
+# GLOBAL CACHES (10K+ GROUP OPTIMIZATION)
+# ===============================
+BOT_ADMIN_CACHE = set()        # (chat_id) → bot admin cache
+REMINDER_MESSAGES = {}
+PENDING_BROADCAST = {}
+
+# ===============================
+# CONFIG
+# ===============================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+START_IMAGE = "https://i.postimg.cc/q7PtfZYj/Untitled-design-(16).png"
+
+# ===============================
 # MAIN DATABASE (users / groups)
 # ===============================
-db_conn = sqlite3.connect("database.db", check_same_thread=False)
+db_conn = sqlite3.connect(
+    "database.db",
+    check_same_thread=False,
+    isolation_level=None   # ✅ auto-commit (SQLite lock issue fix)
+)
 db_cur = db_conn.cursor()
 
 db_cur.execute("""
@@ -42,27 +60,32 @@ CREATE TABLE IF NOT EXISTS groups (
 )
 """)
 
-db_conn.commit()
-
 def save_user_db(user_id: int):
-    db_cur.execute(
-        "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
-        (user_id,)
-    )
-    db_conn.commit()
+    try:
+        db_cur.execute(
+            "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
+            (user_id,)
+        )
+    except:
+        pass
 
 def save_group_db(group_id: int):
-    db_cur.execute(
-        "INSERT OR IGNORE INTO groups (group_id) VALUES (?)",
-        (group_id,)
-    )
-    db_conn.commit()
-
+    try:
+        db_cur.execute(
+            "INSERT OR IGNORE INTO groups (group_id) VALUES (?)",
+            (group_id,)
+        )
+    except:
+        pass
 
 # ===============================
-# JOB DATABASE (delete jobs)
+# JOB DATABASE (delete jobs / spam counter)
 # ===============================
-job_conn = sqlite3.connect("jobs.db", check_same_thread=False)
+job_conn = sqlite3.connect(
+    "jobs.db",
+    check_same_thread=False,
+    isolation_level=None   # ✅ prevent database locked (important for 10K groups)
+)
 job_cur = job_conn.cursor()
 
 job_cur.execute("""
@@ -73,11 +96,6 @@ CREATE TABLE IF NOT EXISTS delete_jobs (
 )
 """)
 
-job_conn.commit()
-
-# ===============================
-# Database Table (link spam counter)
-# ===============================
 job_cur.execute("""
 CREATE TABLE IF NOT EXISTS link_spam (
     chat_id INTEGER,
@@ -87,20 +105,6 @@ CREATE TABLE IF NOT EXISTS link_spam (
     PRIMARY KEY (chat_id, user_id)
 )
 """)
-job_conn.commit()
-
-# ===============================
-# SAVE
-# ===============================
-REMINDER_MESSAGES = {}
-PENDING_BROADCAST = {}
-
-# ===============================
-# CONFIG
-# ===============================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))
-START_IMAGE = "https://i.postimg.cc/q7PtfZYj/Untitled-design-(16).png"
 
 # ===============================
 # /start (PRIVATE)
@@ -113,12 +117,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_user:
         return
 
-    user = update.effective_user          # ✅ အရင် define
-    save_user_db(user.id)                 # ✅ အခုမှ safe
+    user = update.effective_user
+    save_user_db(user.id)   # ✅ safe (already fixed DB)
 
     bot = await context.bot.get_me()
 
-    # ✅ SAFE username
     bot_username = bot.username or ""
 
     user_name = user.first_name or "User"
@@ -135,12 +138,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>ငါ၏လုပ်နိုင်စွမ်းကို ကောင်းကောင်းအသုံးချပါ။</b>\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         "<b>📌 ငါ၏လုပ်နိုင်စွမ်း</b>\n\n"
-        "✅ Auto Link Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
-        "✅ Spam Link Mute ( Link 3 ခါ ပို့ရင် 10 မိနစ် Auto Mute )\n\n"
+        "✅ Auto Link Delete\n"
+        "✅ Spam Link Mute (3 ခါ → 10 မိနစ်)\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        "<b>📥 ငါ့ကိုအသုံးပြုရန်</b>\n\n"
-        "➕ ငါ့ကို Group ထဲထည့်ပါ\n"
-        "⭐️ ငါ့ကို Admin ပေးပါ"
+        "<b>📥 အသုံးပြုရန်</b>\n\n"
+        "➕ Group ထဲထည့်ပါ\n"
+        "⭐️ Admin ပေးပါ"
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -172,35 +175,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===============================
-# 🔗 AUTO LINK DELETE (JobQueue + SQLite)
+# ⏱️ DELETE JOB CONFIG
 # ===============================
-import sqlite3
-import time
-from telegram import Update
-from telegram.ext import ContextTypes
+DELETE_AFTER = 600  # 10 minutes
 
-# ⏱️ 10 minutes
-DELETE_AFTER = 600
-
-# ===============================
-# 🗄 DATABASE SETUP
-# ===============================
-conn = sqlite3.connect("jobs.db", check_same_thread=False)
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS delete_jobs (
-    chat_id INTEGER,
-    message_id INTEGER,
-    run_at INTEGER
-)
-""")
-conn.commit()
 
 # ===============================
 # 🧹 JOB FUNCTION
 # ===============================
 async def delete_warn_job(context: ContextTypes.DEFAULT_TYPE):
+    if not context.job or not context.job.data:
+        return
+
     data = context.job.data
     chat_id = data["chat_id"]
     message_id = data["message_id"]
@@ -210,14 +196,16 @@ async def delete_warn_job(context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    cur.execute(
-        "DELETE FROM delete_jobs WHERE chat_id=? AND message_id=?",
-        (chat_id, message_id)
-    )
-    conn.commit()
+    try:
+        job_cur.execute(
+            "DELETE FROM delete_jobs WHERE chat_id=? AND message_id=?",
+            (chat_id, message_id)
+        )
+    except:
+        pass
 
 # ===============================
-# 🔗 AUTO LINK DELETE
+# 🔗 AUTO LINK DELETE (OPTIMIZED)
 # ===============================
 async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -228,20 +216,28 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat or not message or not user:
         return
 
-    # 🧠 BOT admin auto-check
-    try:
-        me = await context.bot.get_chat_member(chat.id, context.bot.id)
-        if me.status not in ("administrator", "creator"):
-            return
-    except:
-        return
-
     if chat.type not in ("group", "supergroup"):
         return
 
-    # admin bypass
+    chat_id = chat.id
+
+    # ===============================
+    # 🤖 BOT ADMIN CHECK (CACHE)
+    # ===============================
+    if chat_id not in BOT_ADMIN_CACHE:
+        try:
+            me = await context.bot.get_chat_member(chat_id, context.bot.id)
+            if me.status not in ("administrator", "creator"):
+                return
+            BOT_ADMIN_CACHE.add(chat_id)   # ✅ cache admin group
+        except:
+            return
+
+    # ===============================
+    # 👤 USER ADMIN BYPASS
+    # ===============================
     try:
-        member = await context.bot.get_chat_member(chat.id, user.id)
+        member = await context.bot.get_chat_member(chat_id, user.id)
         if member.status in ("administrator", "creator"):
             return
     except:
@@ -251,40 +247,44 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    if "http://" in text or "https://" in text or "t.me/" in text:
-        try:
-            await link_spam_control(update, context)  # ✅ ERROR FIX (ဒီလိုင်းပဲ ထည့်)
+    if "http://" not in text and "https://" not in text and "t.me/" not in text:
+        return
 
-            await message.delete()
+    try:
+        # 🔗 link spam counter (mute logic)
+        await link_spam_control(update, context)
 
-            warn = await context.bot.send_message(
-            chat_id=chat.id,
+        # 🗑 delete link message
+        await message.delete()
+
+        warn = await context.bot.send_message(
+            chat_id=chat_id,
             text=(
                 f"⚠️ ({user.first_name}) မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
                 "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူ။"
             )
         )
 
-            run_at = int(time.time()) + DELETE_AFTER
+        run_at = int(time.time()) + DELETE_AFTER
 
-            # ✅ FIXED HERE
-            cur.execute(
-                "INSERT INTO delete_jobs VALUES (?, ?, ?)",
-                (chat.id, warn.message_id, run_at)
-            )
-            conn.commit()
+        # 💾 save delete job (single connection)
+        job_cur.execute(
+            "INSERT INTO delete_jobs VALUES (?, ?, ?)",
+            (chat_id, warn.message_id, run_at)
+        )
+        job_conn.commit()
 
-            context.job_queue.run_once(
-                delete_warn_job,
-                when=DELETE_AFTER,
-                data={
-                    "chat_id": chat.id,
-                    "message_id": warn.message_id
-                }
-            )
+        context.job_queue.run_once(
+            delete_warn_job,
+            when=DELETE_AFTER,
+            data={
+                "chat_id": chat_id,
+                "message_id": warn.message_id
+            }
+        )
 
-        except:
-            pass
+    except:
+        pass
 
 # ===============================
 # 🔄 RESTORE JOBS ON START
@@ -292,7 +292,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def restore_jobs(app):
     now = int(time.time())
 
-    rows = cur.execute(
+    rows = job_cur.execute(
         "SELECT chat_id, message_id, run_at FROM delete_jobs"
     ).fetchall()
 
@@ -309,17 +309,22 @@ async def restore_jobs(app):
         )
 
 # ===============================
-# Save Group
+# Save Group (OPTIMIZED)
 # ===============================
 async def save_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if not chat or chat.type not in ("group", "supergroup"):
         return
 
+    if chat.id in BOT_ADMIN_CACHE:
+        save_group_db(chat.id)
+        return
+
     try:
         me = await context.bot.get_chat_member(chat.id, context.bot.id)
         if me.status in ("administrator", "creator"):
-            save_group_db(chat.id)  # ✅ DB ထဲ သိမ်း
+            BOT_ADMIN_CACHE.add(chat.id)
+            save_group_db(chat.id)
     except:
         pass
 
@@ -438,11 +443,10 @@ async def send_content(context, chat_id, data):
         await context.bot.send_message(chat_id, data["text"])
 
 # ===============================
-# Admin Permission + ThankYou
+# Admin Permission + ThankYou (OPTIMIZED)
 # ===============================
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # ✅ FIX: guard clause (Error fix only)
     if not update.my_chat_member:
         return
 
@@ -450,15 +454,19 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     old = update.my_chat_member.old_chat_member
     new = update.my_chat_member.new_chat_member
 
-    # 🧠 Admin auto-check (တစ်ခါတည်း)
-    try:
-        me = await context.bot.get_chat_member(chat.id, context.bot.id)
-        is_admin = me.status in ("administrator", "creator")
-    except:
-        is_admin = False
-
-    if is_admin:
+    # ✅ FAST PATH (cache hit)
+    if chat.id in BOT_ADMIN_CACHE:
         save_group_db(chat.id)
+        is_admin = True
+    else:
+        try:
+            me = await context.bot.get_chat_member(chat.id, context.bot.id)
+            is_admin = me.status in ("administrator", "creator")
+            if is_admin:
+                BOT_ADMIN_CACHE.add(chat.id)
+                save_group_db(chat.id)
+        except:
+            is_admin = False
 
     # ===============================
     # 🟢 1) BOT PROMOTED TO ADMIN → THANK YOU
@@ -625,25 +633,25 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     now = int(time.time())
 
-    row = cur.execute(
+    row = job_cur.execute(
         "SELECT count FROM link_spam WHERE chat_id=? AND user_id=?",
         (chat.id, user.id)
     ).fetchone()
 
     if row:
         count = row[0] + 1
-        cur.execute(
+        job_cur.execute(
             "UPDATE link_spam SET count=?, last_time=? WHERE chat_id=? AND user_id=?",
             (count, now, chat.id, user.id)
         )
     else:
         count = 1
-        cur.execute(
+        job_cur.execute(
             "INSERT INTO link_spam VALUES (?, ?, ?, ?)",
             (chat.id, user.id, count, now)
         )
 
-    conn.commit()
+    job_conn.commit()
 
     # 🚨 Limit reached → mute
     if count >= LINK_LIMIT:
@@ -652,12 +660,12 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         until = now + MUTE_SECONDS
 
         await context.bot.restrict_chat_member(
-            chat_id=chat.id,
-            user_id=user.id,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until
-    )
-
+    chat_id=chat.id,
+    user_id=user.id,
+    permissions=ChatPermissions(can_send_messages=False),
+    until_date=until
+)
+        
         await context.bot.send_message(
             chat.id,
             f"🔇 <b>{user.first_name}</b> ကို\n"
@@ -667,11 +675,11 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # reset counter after mute
-        cur.execute(
+        job_cur.execute(
             "DELETE FROM link_spam WHERE chat_id=? AND user_id=?",
             (chat.id, user.id)
         )
-        conn.commit()
+        job_conn.commit()
 
 # ===============================
 # MAIN
@@ -688,7 +696,7 @@ def main():
             link_spam_control
         ),
         group=0
-)
+    )
 
     # 2️⃣ auto delete နောက်
     app.add_handler(
@@ -697,26 +705,41 @@ def main():
             auto_delete_links
         ),
         group=1
-)
-
-    app.add_handler(
-    MessageHandler(
-        filters.User(OWNER_ID)
-        & (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL),
-        broadcast
     )
-)
-    app.add_handler(CallbackQueryHandler(broadcast_confirm_handler, pattern="broadcast_confirm"))
-    app.add_handler(CallbackQueryHandler(broadcast_cancel_handler, pattern="broadcast_cancel"))
 
     app.add_handler(
-    ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
-)
-    
+        MessageHandler(
+            filters.User(OWNER_ID)
+            & (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+            broadcast
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            broadcast_confirm_handler,
+            pattern="broadcast_confirm"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            broadcast_cancel_handler,
+            pattern="broadcast_cancel"
+        )
+    )
+
+    app.add_handler(
+        ChatMemberHandler(
+            on_my_chat_member,
+            ChatMemberHandler.MY_CHAT_MEMBER
+        )
+    )
+
     app.post_init = restore_jobs
 
     print("🤖 Link Delete Bot running.....")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
