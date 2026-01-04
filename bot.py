@@ -689,20 +689,20 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    # 1️⃣ link spam control အရင်
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION),
-            link_spam_control
-        ),
-        group=0
-    )
-
-    # 2️⃣ auto delete နောက်
+    # 1️⃣ auto delete အရင်
     app.add_handler(
         MessageHandler(
             filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION),
             auto_delete_links
+        ),
+        group=0
+    )
+
+    # 2️⃣ link spam / mute နောက်
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION),
+            link_spam_control
         ),
         group=1
     )
