@@ -250,16 +250,19 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
-    text = (
-    message.text
-    or message.caption
-    or message.link_preview and message.link_preview.url
-    or ""
-    ).lower()
-    if not text:
-        return
+    entities = []
+    if message.entities:
+        entities.extend(message.entities)
+    if message.caption_entities:
+        entities.extend(message.caption_entities)
 
-    if "http://" not in text and "https://" not in text and "t.me/" not in text:
+    has_link = False
+    for e in entities:
+        if e.type in ("url", "text_link"):
+            has_link = True
+            break
+
+    if not has_link:
         return
 
     try:
@@ -632,13 +635,19 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ("group", "supergroup"):
         return
 
-    text = (
-    message.text
-    or message.caption
-    or message.link_preview and message.link_preview.url
-    or ""
-    ).lower()
-    if not any(k in text for k in LINK_KEYWORDS):
+    entities = []
+    if message.entities:
+        entities.extend(message.entities)
+    if message.caption_entities:
+        entities.extend(message.caption_entities)
+
+    has_link = False
+    for e in entities:
+        if e.type in ("url", "text_link"):
+            has_link = True
+            break
+
+    if not has_link:
         return
 
     # Admin bypass
