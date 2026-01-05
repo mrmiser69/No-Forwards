@@ -6,6 +6,7 @@ import sqlite3
 import time
 import asyncio
 from datetime import timedelta
+from telegram.error import Forbidden
 
 from telegram import (
     Update,
@@ -226,14 +227,16 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================
     # 🤖 BOT ADMIN CHECK (CACHE)
     # ===============================
-    if chat_id not in BOT_ADMIN_CACHE:
-        try:
-            me = await context.bot.get_chat_member(chat_id, context.bot.id)
-            if me.status not in ("administrator", "creator"):
-                return
-            BOT_ADMIN_CACHE.add(chat_id)   # ✅ cache admin group
-        except:
-            return
+    try:
+        await message.delete()
+    except Forbidden:
+        # ❗ Bot admin မဟုတ်တော့ရင် cache ဖယ်
+        BOT_ADMIN_CACHE.discard(chat_id)
+        return
+    except Exception as e:
+        print("DELETE ERROR:", e)
+        return
+
 
     # ===============================
     # 👤 USER ADMIN BYPASS
