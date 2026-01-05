@@ -738,6 +738,62 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         job_conn.commit()
 
 # ===============================
+# Manual Refresh
+# ===============================
+async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not chat or chat.type not in ("group", "supergroup"):
+        return
+
+    # admin only
+    try:
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status not in ("administrator", "creator"):
+            return
+    except:
+        return
+
+    try:
+        me = await context.bot.get_chat_member(chat.id, context.bot.id)
+        if me.status in ("administrator", "creator"):
+            BOT_ADMIN_CACHE.add(chat.id)
+            save_group_db(chat.id)
+
+            await update.message.reply_text(
+                "✅ Bot refreshed!\n\n"
+                "........................\n"
+                "Link delete & mute အလုပ်လုပ်နေပါပြီ။"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Bot ကို Admin permission ပေးထားပါ။"
+            )
+    except:
+        pass
+
+# ===============================
+# 🔄 AUTO REFRESH ADMIN CACHE ON START
+# ===============================
+async def refresh_admin_cache(app):
+    print("🔄 Refreshing admin cache...")
+
+    rows = db_cur.execute(
+        "SELECT group_id FROM groups"
+    ).fetchall()
+
+    for (chat_id,) in rows:
+        try:
+            me = await app.bot.get_chat_member(chat_id, app.bot.id)
+            if me.status in ("administrator", "creator"):
+                BOT_ADMIN_CACHE.add(chat_id)
+        except:
+            pass
+
+    print(f"✅ Admin cache loaded: {len(BOT_ADMIN_CACHE)} groups")
+
+# ===============================
 # MAIN
 # ===============================
 def main():
@@ -782,7 +838,13 @@ def main():
         )
     )
     
-    app.post_init = restore_jobs
+    app.add_handler(CommandHandler("refresh", refresh))
+    
+    async def on_startup(app):
+      await restore_jobs(app)
+      await refresh_admin_cache(app)
+
+    app.post_init = on_startup
 
     print("🤖 Link Delete Bot running.....")
     app.run_polling()
