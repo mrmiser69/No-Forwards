@@ -249,6 +249,10 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
+    # ==============================
+    # Link detect (improved)
+    # ==============================
+
     entities = []
     if message.entities:
         entities.extend(message.entities)
@@ -258,17 +262,21 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (message.text or message.caption or "").lower()
 
     has_link = False
+
     for e in entities:
+        # Detect real URLs & text_link entities
         if e.type in ("url", "text_link"):
             has_link = True
             break
 
+    # Fallback: catch t.me, http(s) even without entity
     if not has_link:
         if "http://" in text or "https://" in text or "t.me/" in text:
             has_link = True
 
     if not has_link:
         return
+
 
     try:
         # 🔗 spam counter (no return impact)
@@ -642,6 +650,10 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ("group", "supergroup"):
         return
 
+    # ==============================
+    # Link detect (improved)
+    # ==============================
+
     entities = []
     if message.entities:
         entities.extend(message.entities)
@@ -651,18 +663,20 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (message.text or message.caption or "").lower()
 
     has_link = False
+
     for e in entities:
+        # Detect real URLs & text_link entities
         if e.type in ("url", "text_link"):
             has_link = True
             break
 
+    # Fallback: catch t.me, http(s) even without entity
     if not has_link:
         if "http://" in text or "https://" in text or "t.me/" in text:
             has_link = True
 
     if not has_link:
         return
-
 
     # Admin bypass
     try:
