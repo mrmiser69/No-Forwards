@@ -139,12 +139,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>ငါ၏လုပ်နိုင်စွမ်းကို ကောင်းကောင်းအသုံးချပါ။</b>\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         "<b>📌 ငါ၏လုပ်နိုင်စွမ်း</b>\n\n"
-        "✅ Auto Link Delete\n"
-        "✅ Spam Link Mute (3 ခါ → 10 မိနစ်)\n\n"
+        "✅ Auto Link Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
+        "✅ Spam Link Mute ( Link 3 ခါ ပို့ရင် 10 မိနစ် Auto Mute )\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        "<b>📥 အသုံးပြုရန်</b>\n\n"
-        "➕ Group ထဲထည့်ပါ\n"
-        "⭐️ Admin ပေးပါ"
+        "<b>📥 ငါ့ကိုအသုံးပြုရန်</b>\n\n"
+        "➕ ငါ့ကို Group ထဲထည့်ပါ\n"
+        "⭐️ ငါ့ကို Admin ပေးပါ"
     )
 
     keyboard = InlineKeyboardMarkup(
