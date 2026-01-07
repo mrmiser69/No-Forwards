@@ -177,10 +177,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===============================
-# /stats (OWNER ONLY)
+# /stats (OWNER ONLY - FULL)
 # ===============================
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
     chat = update.effective_chat
 
@@ -191,25 +190,40 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id != OWNER_ID:
         return
 
-    # 📊 Count users & groups
+    # 👤 Users count
     user_count = db_cur.execute(
         "SELECT COUNT(*) FROM users"
     ).fetchone()[0]
 
+    # 👥 Groups count
     group_count = db_cur.execute(
         "SELECT COUNT(*) FROM groups"
     ).fetchone()[0]
 
-    # ⏱ uptime
+    # 🔐 Admin groups (cache based)
+    admin_groups = len(BOT_ADMIN_CACHE)
+
+    # ⚠️ Groups without admin
+    no_admin_groups = max(0, group_count - admin_groups)
+
+    # ⏱ Uptime
     uptime_seconds = int(time.time()) - BOT_START_TIME
-    hours = uptime_seconds // 3600
+    days = uptime_seconds // 86400
+    hours = (uptime_seconds % 86400) // 3600
     minutes = (uptime_seconds % 3600) // 60
+
+    uptime_text = (
+        f"{days}d {hours}h {minutes}m"
+        if days > 0 else f"{hours}h {minutes}m"
+    )
 
     text = (
         "📊 <b>Bot Statistics</b>\n\n"
         f"👤 Users: <b>{user_count}</b>\n"
         f"👥 Groups: <b>{group_count}</b>\n\n"
-        f"⏱ Uptime: <b>{hours}h {minutes}m</b>\n"
+        f"🔐 Admin Groups: <b>{admin_groups}</b>\n"
+        f"⚠️ No Admin Groups: <b>{no_admin_groups}</b>\n\n"
+        f"⏱ Uptime: <b>{uptime_text}</b>\n"
         "🤖 Status: <b>Running ✅</b>"
     )
 
@@ -221,8 +235,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 # ⏱️ DELETE JOB CONFIG
 # ===============================
-DELETE_AFTER = 600  # 10 minutes
-
+DELETE_AFTER = 10800  # 3 hour
 
 # ===============================
 # 🧹 JOB FUNCTION
@@ -265,7 +278,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat.type in ("group", "supergroup"):
         save_group_db(chat.id)
-         
+
     chat_id = chat.id
     admins = USER_ADMIN_CACHE.setdefault(chat_id, set())
 
@@ -641,20 +654,27 @@ async def admin_reminder(context: ContextTypes.DEFAULT_TYPE):
         if me.status in ("administrator", "creator"):
             return  # ✅ Admin ဖြစ်ပြီးသား → Reminder မပို့
 
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "⭐️ GIVE ADMIN PERMISSION",
+                url=f"https://t.me/{me.username}?startgroup=true"
+            )
+        ]])
+
         msg = await context.bot.send_message(
             chat_id,
             f"⏰ <b>Reminder ({count}/{total})</b>\n\n"
             "🤖 Bot ကို အလုပ်လုပ်နိုင်ရန်\n"
             "⭐️ <b>Admin Permission ပေးပါ</b>\n\n"
             "⚠️ Required: Delete messages",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=keyboard
         )
 
         REMINDER_MESSAGES.setdefault(chat_id, []).append(msg.message_id)
 
     except:
         pass
-
 
 # ===============================
 # delete message job
