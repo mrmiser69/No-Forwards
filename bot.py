@@ -263,9 +263,9 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if message.text and message.text.startswith("/"):
         return
 
-    if chat.type not in ("group", "supergroup"):
-        return
-    
+    if chat.type in ("group", "supergroup"):
+        save_group_db(chat.id)
+         
     chat_id = chat.id
     admins = USER_ADMIN_CACHE.setdefault(chat_id, set())
 
@@ -384,6 +384,13 @@ async def restore_jobs(app):
                 "message_id": message_id
             }
         )
+
+# ===============================
+# group save helper
+# ===============================
+def ensure_group_saved(chat):
+    if chat and chat.type in ("group", "supergroup"):
+        save_group_db(chat.id)
 
 # ===============================
 # Save Group (OPTIMIZED)
