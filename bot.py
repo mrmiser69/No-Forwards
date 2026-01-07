@@ -843,6 +843,42 @@ async def refresh_admin_cache(app):
     print(f"✅ Admin cache loaded: {len(BOT_ADMIN_CACHE)} groups")
 
 # ===============================
+# /refresh_all (Owner only)
+# ===============================
+async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+
+    msg = update.effective_message
+    groups = db_cur.execute("SELECT group_id FROM groups").fetchall()
+
+    refreshed = 0
+    removed = 0
+
+    for (gid,) in groups:
+        try:
+            me = await context.bot.get_chat_member(gid, context.bot.id)
+            if me.status in ("administrator", "creator"):
+                BOT_ADMIN_CACHE.add(gid)
+                refreshed += 1
+            else:
+                db_cur.execute("DELETE FROM groups WHERE group_id=?", (gid,))
+                removed += 1
+        except:
+            db_cur.execute("DELETE FROM groups WHERE group_id=?", (gid,))
+            removed += 1
+
+    db_conn.commit()
+
+    await msg.reply_text(
+        f"🔄 <b>Refresh All Completed</b>\n\n"
+        f"✅ Active groups: {refreshed}\n"
+        f"❌ Removed groups: {removed}",
+        parse_mode="HTML"
+    )
+
+
+# ===============================
 # MAIN
 # ===============================
 def main():
@@ -851,6 +887,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("refresh", refresh))
+    app.add_handler(CommandHandler("refresh_all", refresh_all))
 
     # 🔗 Auto delete + spam control (combined logic)
     app.add_handler(
