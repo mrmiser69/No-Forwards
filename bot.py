@@ -31,6 +31,7 @@ BOT_ADMIN_CACHE = set()        # (chat_id) → bot admin cache
 REMINDER_MESSAGES = {}
 PENDING_BROADCAST = {}
 USER_ADMIN_CACHE = {}  # {chat_id: set(user_id)}
+BOT_START_TIME = int(time.time())
 
 # ===============================
 # CONFIG
@@ -173,6 +174,48 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=text,
         parse_mode="HTML",
         reply_markup=keyboard
+    )
+
+# ===============================
+# /stats (OWNER ONLY)
+# ===============================
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not user or not chat:
+        return
+
+    # 🔒 Owner only
+    if user.id != OWNER_ID:
+        return
+
+    # 📊 Count users & groups
+    user_count = db_cur.execute(
+        "SELECT COUNT(*) FROM users"
+    ).fetchone()[0]
+
+    group_count = db_cur.execute(
+        "SELECT COUNT(*) FROM groups"
+    ).fetchone()[0]
+
+    # ⏱ uptime
+    uptime_seconds = int(time.time()) - BOT_START_TIME
+    hours = uptime_seconds // 3600
+    minutes = (uptime_seconds % 3600) // 60
+
+    text = (
+        "📊 <b>Bot Statistics</b>\n\n"
+        f"👤 Users: <b>{user_count}</b>\n"
+        f"👥 Groups: <b>{group_count}</b>\n\n"
+        f"⏱ Uptime: <b>{hours}h {minutes}m</b>\n"
+        "🤖 Status: <b>Running ✅</b>"
+    )
+
+    await update.effective_message.reply_text(
+        text,
+        parse_mode="HTML"
     )
 
 # ===============================
@@ -806,6 +849,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("refresh", refresh))
 
     # 🔗 Auto delete + spam control (combined logic)
