@@ -6,6 +6,7 @@ import time
 import asyncio
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
+from telegram.error import RetryAfter
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -34,7 +35,6 @@ REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
 BOT_START_TIME = int(time.time())
 
-EXECUTOR = ThreadPoolExecutor(max_workers=5)
 # ===============================
 # CONFIG
 # ===============================
@@ -68,42 +68,43 @@ pool = ConnectionPool(
 # =====================================
 # DB EXECUTOR (ASYNC SAFE)
 # =====================================
-def _db_execute(query, params=None, fetch=False):
+def db_execute(query, params=None, fetch=False):
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
             if fetch:
                 cols = [d.name for d in cur.description]
-                return [dict(zip(cols, r)) for r in cur.fetchall()]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
             conn.commit()
-
-async def db_execute(query, params=None, fetch=False):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        EXECUTOR, _db_execute, query, params, fetch
-    )
 
 # =====================================
 # INIT DB
 # =====================================
 async def init_db():
-    await db_execute("""
+     db_execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY
         )
     """)
-    await db_execute("""
+     db_execute("""
         CREATE TABLE IF NOT EXISTS groups (
             group_id BIGINT PRIMARY KEY
         )
     """)
-    await db_execute("""
+     db_execute("""
         CREATE TABLE IF NOT EXISTS link_spam (
             chat_id BIGINT,
             user_id BIGINT,
             count INT,
             last_time BIGINT,
             PRIMARY KEY (chat_id, user_id)
+        )
+    """)
+     db_execute("""
+        CREATE TABLE IF NOT EXISTS delete_jobs (
+            chat_id BIGINT,
+            message_id BIGINT,
+            run_at BIGINT
         )
     """)
 
@@ -121,7 +122,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     from html import escape
 
-    await db_execute(
+    db_execute(
         "INSERT INTO users VALUES (%s) ON CONFLICT DO NOTHING",
         (user.id,)
     )
@@ -194,8 +195,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ):
         return
 
-    users = db_execute("SELECT COUNT(*) AS c FROM users", fetch=True)
-    groups = db_execute("SELECT COUNT(*) AS c FROM groups", fetch=True)
+    users = await db_execute("SELECT COUNT(*) AS c FROM users", fetch=True)
+    groups = await db_execute("SELECT COUNT(*) AS c FROM groups", fetch=True)
 
     user_count = users[0]["c"] if users else 0
     group_count = groups[0]["c"] if groups else 0
@@ -265,7 +266,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if me.status not in ("administrator", "creator"):
                 return
             BOT_ADMIN_CACHE.add(chat_id)
-            await db_execute(
+            db_execute(
                 "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
                 (chat.id,)
             )
@@ -321,7 +322,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 async def restore_jobs(app):
     now = int(time.time())
-    rows = db_execute(
+    rows = await db_execute(
         "SELECT chat_id, message_id, run_at FROM delete_jobs",
         fetch=True
     ) or []
@@ -572,7 +573,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save group whenever bot appears
     if new.user.id == context.bot.id:
-        await db_execute(
+         db_execute(
             "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
             (chat.id,)
         )
