@@ -1013,12 +1013,12 @@ def main():
     # -------------------------------
     app.add_handler(
     MessageHandler(
-        (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP)
-        & (filters.TEXT | filters.CAPTION),
+        filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION),
         auto_delete_links
     ),
     group=0
 )
+
 
     # -------------------------------
     # Broadcast (OWNER ONLY)
