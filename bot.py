@@ -7,9 +7,10 @@ import asyncio
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
 from telegram.error import RetryAfter
-
+from html import escape
 import psycopg
 from psycopg_pool import ConnectionPool
+import contextlib
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -126,11 +127,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat or chat.type != "private" or not user or not msg:
         return
 
-    from html import escape
-
-    await db_execute(
-        "INSERT INTO users VALUES (%s) ON CONFLICT DO NOTHING",
-        (user.id,)
+    # 🔥 DB save in background (NO DELAY)
+    context.application.create_task(
+        db_execute(
+            "INSERT INTO users VALUES (%s) ON CONFLICT DO NOTHING",
+            (user.id,)
+        )
     )
 
     bot = context.bot
@@ -260,24 +262,39 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_link and ("http://" in text or "https://" in text or "t.me/" in text):
         has_link = True
 
+    # 🔗 detect link
     if not has_link:
         return
 
-    # ===========================
-    # 🤖 BOT ADMIN CHECK (CACHE FIRST)
-    # ===========================
+    # 🔥 DELETE FIRST (FAST)
+    try:
+        await msg.delete()
+    except:
+        return
+
+    # 🤖 BOT ADMIN CACHE (soft)
     if chat_id not in BOT_ADMIN_CACHE:
         try:
             me = await context.bot.get_chat_member(chat_id, context.bot.id)
-            if me.status not in ("administrator", "creator"):
+            if me.status in ("administrator", "creator"):
+                BOT_ADMIN_CACHE.add(chat_id)
+            else:
                 return
-            BOT_ADMIN_CACHE.add(chat_id)
-            await db_execute(
-                "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
-                (chat.id,)
-            )
         except:
             return
+
+    # 💾 DB save → background
+    context.application.create_task(
+        db_execute(
+            "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+            (chat.id,)
+        )
+    )
+
+    # ⚠️ spam control → background
+    context.application.create_task(
+        link_spam_control(update, context)
+    )
 
     # ===========================
     # 👤 USER ADMIN CHECK (CACHE)
@@ -291,14 +308,6 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except:
             return
-
-    # ===========================
-    # 🗑 DELETE (INSTANT)
-    # ===========================
-    try:
-        await msg.delete()
-    except:
-        return
 
     # ===========================
     # ⚠️ SPAM CONTROL (BACKGROUND)
@@ -463,32 +472,31 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
     progress_task = asyncio.create_task(progress_updater())
 
     # 🚀 FAST SEND (batch)
-    BATCH_SIZE = 20
+    BATCH_SIZE = 10  # Railway safe
 
     for i in range(0, total, BATCH_SIZE):
         batch = targets[i:i + BATCH_SIZE]
 
-        tasks = []
-        for chat_id in batch:
-            tasks.append(
-                safe_send(send_content, context, chat_id, data)
-            )
+        tasks = [
+            safe_send(send_content, context, chat_id, data)
+            for chat_id in batch
+        ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for chat_id, result in zip(batch, results):
             sent += 1
             if isinstance(result, Exception):
-                await db_execute(
-                    "DELETE FROM users WHERE user_id=%s",
-                    (chat_id,)
+                context.application.create_task(
+                    db_execute("DELETE FROM users WHERE user_id=%s", (chat_id,))
                 )
-                await db_execute(
-                    "DELETE FROM groups WHERE group_id=%s",
-                    (chat_id,)
+                context.application.create_task(
+                    db_execute("DELETE FROM groups WHERE group_id=%s", (chat_id,))
                 )
 
     progress_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await progress_task
 
     elapsed = int(time.time() - start_time)
     await progress_msg.edit_text(
@@ -532,14 +540,10 @@ async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = context.job.data["chat_id"]
 
-    try:
-        me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if me.status in ("administrator", "creator"):
-            return  # ✅ still admin
-    except:
-        pass
+    # ✅ CACHE FIRST (NO API CALL)
+    if chat_id in BOT_ADMIN_CACHE:
+        return
 
-    # ✅ CLEAR MEMORY FIRST
     BOT_ADMIN_CACHE.discard(chat_id)
     USER_ADMIN_CACHE.pop(chat_id, None)
     REMINDER_MESSAGES.pop(chat_id, None)
@@ -554,7 +558,10 @@ async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 def clear_reminders(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     for job in context.job_queue.jobs():
-        if job.data and job.data.get("chat_id") == chat_id:
+        data = job.data
+        if not data:
+            continue
+        if data.get("chat_id") == chat_id:
             job.schedule_removal()
 
 # ===============================
@@ -579,9 +586,11 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save group whenever bot appears
     if new.user.id == context.bot.id:
-         await db_execute(
-            "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
-            (chat.id,)
+        context.application.create_task(
+            db_execute(
+                "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+                (chat.id,)
+            )
         )
 
     # ===============================
@@ -594,6 +603,10 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ):
         BOT_ADMIN_CACHE.discard(chat.id)
         clear_reminders(context, chat.id)
+        
+        # cancel auto-leave
+        for job in context.job_queue.get_jobs_by_name(f"auto_leave_{chat.id}"):
+            job.schedule_removal()
 
         context.job_queue.run_once(
             leave_if_not_admin,
@@ -611,12 +624,13 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         and new.status == "administrator"
         and old.status != "administrator"
     ):
-        BOT_ADMIN_CACHE.add(chat.id)
-        clear_reminders(context, chat.id)
-
+        
         # cancel auto-leave
         for job in context.job_queue.get_jobs_by_name(f"auto_leave_{chat.id}"):
             job.schedule_removal()
+        
+        BOT_ADMIN_CACHE.add(chat.id)
+        clear_reminders(context, chat.id)
 
         thank = await context.bot.send_message(
             chat.id,
@@ -688,14 +702,13 @@ async def admin_reminder(context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = context.job.data["chat_id"]
-
+    count = context.job.data["count"]
+    total = context.job.data["total"]
+      
     if chat_id in BOT_ADMIN_CACHE:
         clear_reminders(context, chat_id)
         return
-
-    count = context.job.data["count"]
-    total = context.job.data["total"]
-
+   
     try:
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
         if me.status in ("administrator", "creator"):
@@ -740,21 +753,28 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    await db_execute(
-        "DELETE FROM delete_jobs WHERE chat_id=%s AND message_id=%s",
-        (chat_id, message_id)
+    context.application.create_task(
+        db_execute(
+            "DELETE FROM delete_jobs WHERE chat_id=%s AND message_id=%s",
+            (chat_id, message_id)
+        )
     )
 
 # ===============================
 # admin check
 # ===============================
 async def is_bot_admin(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if chat_id in BOT_ADMIN_CACHE:
+        return True
+
     try:
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        return me.status in ("administrator", "creator")
+        if me.status in ("administrator", "creator"):
+            BOT_ADMIN_CACHE.add(chat_id)
+            return True
+        return False
     except:
         return False
-
 
 # ===============================
 # Link Detect + Count + Mute Code
@@ -810,15 +830,19 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             count = row["count"] + 1
 
-        await db_execute(
-            "UPDATE link_spam SET count=%s, last_time=%s WHERE chat_id=%s AND user_id=%s",
-            (count, now, chat_id, user_id)
+        context.application.create_task(
+            db_execute(
+                "UPDATE link_spam SET count=%s, last_time=%s WHERE chat_id=%s AND user_id=%s",
+                (count, now, chat_id, user_id)
+            )
         )
     else:
         count = 1
-        await db_execute(
-            "INSERT INTO link_spam VALUES (%s,%s,%s,%s)",
-            (chat_id, user_id, count, now)
+        context.application.create_task(
+            db_execute(
+                "INSERT INTO link_spam VALUES (%s,%s,%s,%s)",
+                (chat_id, user_id, count, now)
+            )
         )
 
     # =========================
@@ -842,9 +866,11 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
-        await db_execute(
-            "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
-            (chat_id, user_id)
+        context.application.create_task(
+            db_execute(
+                "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
+                (chat_id, user_id)
+            )
         )
 
 # ===============================
@@ -875,6 +901,12 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         me = await context.bot.get_chat_member(chat.id, context.bot.id)
         if me.status in ("administrator", "creator"):
             BOT_ADMIN_CACHE.add(chat.id)
+            context.application.create_task(
+                db_execute(
+                    "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+                    (chat.id,)
+                )
+            )
     except:
         pass
 
@@ -889,7 +921,11 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 🔄 AUTO REFRESH ADMIN CACHE ON START (SAFE)
 # ===============================
 async def refresh_admin_cache(app):
-    rows = await db_execute("SELECT group_id FROM groups", fetch=True) or []
+    rows = await db_execute(
+        "SELECT group_id FROM groups",
+        fetch=True
+    ) or []
+    
     added = 0
 
     for row in rows:
@@ -902,7 +938,7 @@ async def refresh_admin_cache(app):
         except:
             pass
 
-        await asyncio.sleep(0.05)  # ⛔ flood protection
+        await asyncio.sleep(0.1)  # safer for large groups
 
     print(f"✅ Admin cache loaded: {added}")
 
@@ -927,13 +963,23 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 BOT_ADMIN_CACHE.add(gid)
                 refreshed += 1
             else:
-                await db_execute("DELETE FROM groups WHERE group_id=%s", (gid,))
+                context.application.create_task(
+                    db_execute(
+                        "DELETE FROM groups WHERE group_id=%s",
+                        (gid,)
+                    )
+                )
                 removed += 1
         except:
-            await db_execute("DELETE FROM groups WHERE group_id=%s", (gid,))
-            removed += 1
+                context.application.create_task(
+                    db_execute(
+                        "DELETE FROM groups WHERE group_id=%s",
+                        (gid,)
+                    )
+                )
+                removed += 1
 
-        await asyncio.sleep(0.05)  # ⛔ FloodWait protection
+        await asyncio.sleep(0.1)  
 
     await msg.reply_text(
         "🔄 <b>Refresh All Completed</b>\n\n"
@@ -969,7 +1015,7 @@ def main():
             filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION),
             auto_delete_links
         ),
-        group=0
+        group=1
     )
 
     # -------------------------------
@@ -1017,13 +1063,13 @@ def main():
         except Exception as e:
             print("⚠️ DB init failed:", e)
 
-        await refresh_admin_cache(app)
         await restore_jobs(app)
+        await refresh_admin_cache(app)
 
     app.post_init = on_startup
 
     print("🤖 Link Delete Bot running (PRODUCTION READY)")
-    app.run_polling()
+    app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
     main()
