@@ -69,6 +69,9 @@ def init_db():
 # SAFE DB EXECUTOR (FIXED)
 # ===============================
 def db_execute(query, params=None, fetch=False):
+    if not pg_pool:
+        return None
+
     conn = None
     try:
         conn = pg_pool.getconn()
@@ -78,8 +81,7 @@ def db_execute(query, params=None, fetch=False):
                 return cur.fetchall()
             conn.commit()
     except Exception as e:
-        print("❌ DB ERROR:", e)
-        raise
+        print("DB ERROR:", e)
     finally:
         if conn:
             pg_pool.putconn(conn)
@@ -974,7 +976,6 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ===============================
 def main():
-    init_db()
     
     # ✅ FIX 1: token check BEFORE build
     if not BOT_TOKEN:
@@ -1038,8 +1039,10 @@ def main():
     # Startup jobs
     # -------------------------------
     async def on_startup(app):
+        init_db()
         await refresh_admin_cache(app)
         await restore_jobs(app)
+
 
     app.post_init = on_startup
 
