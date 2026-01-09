@@ -5,7 +5,10 @@ import os
 import time
 import asyncio
 from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor
+
 import psycopg
+from psycopg_pool import ConnectionPool
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -31,6 +34,7 @@ REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
 BOT_START_TIME = int(time.time())
 
+EXECUTOR = ThreadPoolExecutor(max_workers=5)
 # ===============================
 # CONFIG
 # ===============================
@@ -44,67 +48,56 @@ DB_USER = os.getenv("SUPABASE_USER")
 DB_PASS = os.getenv("SUPABASE_PASSWORD")
 DB_PORT = int(os.getenv("SUPABASE_PORT", "6543"))
 
-# ===============================
-# DATABASE (RAILWAY SAFE)
-# ===============================
-def get_conn():
-    return psycopg.connect(
-        host=DB_HOST,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-        port=DB_PORT,
-        sslmode="require",
-        connect_timeout=5,
-    )
+# =====================================
+# DB POOL (RAILWAY SAFE)
+# =====================================
+pool = ConnectionPool(
+    conninfo=(
+        f"host={DB_HOST} "
+        f"dbname={DB_NAME} "
+        f"user={DB_USER} "
+        f"password={DB_PASS} "
+        f"port={DB_PORT} "
+        f"sslmode=require"
+    ),
+    min_size=1,
+    max_size=5,
+    timeout=5,
+)
 
-# ===============================
-# DB EXECUTOR (FAST + SAFE)
-# ===============================
-def db_execute(query: str, params=None, fetch: bool = False):
-    with get_conn() as conn:
+# =====================================
+# DB EXECUTOR (ASYNC SAFE)
+# =====================================
+def _db_execute(query, params=None, fetch=False):
+    with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
             if fetch:
                 cols = [d.name for d in cur.description]
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
             conn.commit()
 
-# ===============================
-# DB HELPERS
-# ===============================
-def save_user_db(user_id: int):
-    db_execute(
-        "INSERT INTO users (user_id) VALUES (%s) ON CONFLICT DO NOTHING",
-        (user_id,),
+async def db_execute(query, params=None, fetch=False):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        EXECUTOR, _db_execute, query, params, fetch
     )
 
-def save_group_db(group_id: int):
-    db_execute(
-        "INSERT INTO groups (group_id) VALUES (%s) ON CONFLICT DO NOTHING",
-        (group_id,),
-    )
-
+# =====================================
+# INIT DB
+# =====================================
 async def init_db():
-    queries = [
-        """
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY
         )
-        """,
-        """
+    """)
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS groups (
             group_id BIGINT PRIMARY KEY
         )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS delete_jobs (
-            chat_id BIGINT,
-            message_id BIGINT,
-            run_at BIGINT
-        )
-        """,
-        """
+    """)
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS link_spam (
             chat_id BIGINT,
             user_id BIGINT,
@@ -112,12 +105,7 @@ async def init_db():
             last_time BIGINT,
             PRIMARY KEY (chat_id, user_id)
         )
-        """
-    ]
-
-    loop = asyncio.get_running_loop()
-    for q in queries:
-        await loop.run_in_executor(None, db_execute, q)
+    """)
 
 # ===============================
 # /start (PRIVATE)
@@ -133,7 +121,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     from html import escape
 
-    save_user_db(user.id)
+    await db_execute(
+        "INSERT INTO users VALUES (%s) ON CONFLICT DO NOTHING",
+        (user.id,)
+    )
 
     bot = context.bot
     bot_username = bot.username or ""
@@ -274,7 +265,10 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if me.status not in ("administrator", "creator"):
                 return
             BOT_ADMIN_CACHE.add(chat_id)
-            save_group_db(chat_id)
+            await db_execute(
+                "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+                (chat.id,)
+            )
         except:
             return
 
@@ -356,7 +350,6 @@ async def save_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         me = await context.bot.get_chat_member(chat.id, context.bot.id)
         if me.status in ("administrator", "creator"):
             BOT_ADMIN_CACHE.add(chat.id)
-            save_group_db(chat.id)
     except:
         pass
 
@@ -579,7 +572,10 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save group whenever bot appears
     if new.user.id == context.bot.id:
-        save_group_db(chat.id)
+        await db_execute(
+            "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+            (chat.id,)
+        )
 
     # ===============================
     # 🔴 BOT DEMOTED OR REMOVED
@@ -872,7 +868,6 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         me = await context.bot.get_chat_member(chat.id, context.bot.id)
         if me.status in ("administrator", "creator"):
             BOT_ADMIN_CACHE.add(chat.id)
-            save_group_db(chat.id)
     except:
         pass
 
