@@ -242,7 +242,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # skip commands
-    if msg.text and msg.text.startswith("/") and not msg.entities:
+    if msg.text and msg.text.startswith("/"):
         return
 
 
@@ -266,37 +266,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 🔗 detect link
     if not has_link:
         return
-
-    # 🔥 DELETE FIRST (FAST)
-    try:
-        await msg.delete()
-    except:
-        return
-
-    # 🤖 BOT ADMIN CACHE (soft)
-    if chat_id not in BOT_ADMIN_CACHE:
-        try:
-            me = await context.bot.get_chat_member(chat_id, context.bot.id)
-            if me.status in ("administrator", "creator"):
-                BOT_ADMIN_CACHE.add(chat_id)
-            else:
-                return
-        except:
-            return
-
-    # 💾 DB save → background
-    context.application.create_task(
-        db_execute(
-            "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
-            (chat.id,)
-        )
-    )
-
-    # ⚠️ spam control → background
-    context.application.create_task(
-        link_spam_control(update, context)
-    )
-
+    
     # ===========================
     # 👤 USER ADMIN CHECK (CACHE)
     # ===========================
@@ -309,12 +279,36 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except:
             return
-
+    
+    # 🤖 BOT ADMIN CHECK FIRST
+    if chat_id not in BOT_ADMIN_CACHE:
+        try:
+            me = await context.bot.get_chat_member(chat_id, context.bot.id)
+            if me.status not in ("administrator", "creator"):
+                return
+            BOT_ADMIN_CACHE.add(chat_id)
+        except:
+            return
+        
+    # 🗑 DELETE AFTER CONFIRM ADMIN
+    try:
+        await msg.delete()
+    except:
+        return    
+    
     # ===========================
     # ⚠️ SPAM CONTROL (BACKGROUND)
     # ===========================
     context.application.create_task(
         link_spam_control(update, context)
+    )
+    
+    # 💾 DB save → background
+    context.application.create_task(
+        db_execute(
+            "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+            (chat.id,)
+        )
     )
 
     # ===========================
@@ -1013,7 +1007,7 @@ def main():
     # -------------------------------
     app.add_handler(
     MessageHandler(
-        filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION),
+        (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP) & (filters.TEXT | filters.CAPTION),
         auto_delete_links
     ),
     group=0
