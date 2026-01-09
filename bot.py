@@ -4,28 +4,26 @@
 import os
 import time
 import asyncio
-
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2.pool import SimpleConnectionPool
+from typing import Optional
 
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ChatPermissions
+    InlineKeyboardButton,
+    ChatPermissions,
 )
-from telegram.error import RetryAfter
-
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
     CommandHandler,
     MessageHandler,
-    filters,
+    CallbackQueryHandler,
     ChatMemberHandler,
-    CallbackQueryHandler
+    ContextTypes,
+    filters,
 )
+
+import psycopg
+from psycopg_pool import ConnectionPool
 
 # ===============================
 # GLOBAL CACHES
@@ -43,48 +41,39 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 START_IMAGE = "https://i.postimg.cc/q7PtfZYj/Untitled-design-(16).png"
 
+DB_HOST = os.getenv("SUPABASE_HOST")
+DB_NAME = os.getenv("SUPABASE_DB")
+DB_USER = os.getenv("SUPABASE_USER")
+DB_PASS = os.getenv("SUPABASE_PASSWORD")
+DB_PORT = os.getenv("SUPABASE_PORT", "5432")
 # ===============================
 # DATABASE POOL (SAFE)
 # ===============================
-pg_pool = None
-
-def init_db():
-    global pg_pool
-    try:
-        pg_pool = SimpleConnectionPool(
-            minconn=1,
-            maxconn=10,
-            host=os.getenv("SUPABASE_HOST"),
-            database=os.getenv("SUPABASE_DB"),
-            user=os.getenv("SUPABASE_USER"),
-            password=os.getenv("SUPABASE_PASSWORD"),
-            port=int(os.getenv("SUPABASE_PORT", "5432")),
-            sslmode="require"
-        )
-        print("✅ DB connected")
-    except Exception as e:
-        print("❌ DB connect failed:", e)
+pg_pool = ConnectionPool(
+    conninfo=(
+        f"host={DB_HOST} "
+        f"dbname={DB_NAME} "
+        f"user={DB_USER} "
+        f"password={DB_PASS} "
+        f"port={DB_PORT} "
+        f"sslmode=require"
+    ),
+    min_size=1,
+    max_size=10,
+    timeout=30,
+)
 
 # ===============================
 # SAFE DB EXECUTOR (FIXED)
 # ===============================
 def db_execute(query, params=None, fetch=False):
-    if not pg_pool:
-        return None
-
-    conn = None
-    try:
-        conn = pg_pool.getconn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with pg_pool.connection() as conn:
+        with conn.cursor() as cur:
             cur.execute(query, params)
             if fetch:
-                return cur.fetchall()
+                cols = [d.name for d in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
             conn.commit()
-    except Exception as e:
-        print("DB ERROR:", e)
-    finally:
-        if conn:
-            pg_pool.putconn(conn)
 
 # ===============================
 # TABLE CREATE
@@ -1039,7 +1028,6 @@ def main():
     # Startup jobs
     # -------------------------------
     async def on_startup(app):
-        init_db()
         await refresh_admin_cache(app)
         await restore_jobs(app)
 
