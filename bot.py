@@ -44,6 +44,7 @@ DB_NAME = os.getenv("SUPABASE_DB")
 DB_USER = os.getenv("SUPABASE_USER")
 DB_PASS = os.getenv("SUPABASE_PASSWORD")
 DB_PORT = int(os.getenv("SUPABASE_PORT", "6543"))
+
 # ===============================
 # DATABASE POOL (SAFE)
 # ===============================
