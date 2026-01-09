@@ -68,14 +68,20 @@ pool = ConnectionPool(
 # =====================================
 # DB EXECUTOR (ASYNC SAFE)
 # =====================================
-def db_execute(query, params=None, fetch=False):
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            if fetch:
-                cols = [d.name for d in cur.description]
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
-            conn.commit()
+async def db_execute(query, params=None, fetch=False):
+    loop = asyncio.get_running_loop()
+
+    def _run():
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                if fetch:
+                    cols = [d.name for d in cur.description]
+                    return [dict(zip(cols, r)) for r in cur.fetchall()]
+                conn.commit()
+
+    return await loop.run_in_executor(None, _run)
+
 
 # =====================================
 # INIT DB
@@ -428,8 +434,8 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_text("❌ Broadcast data မရှိပါ")
         return
 
-    users = db_execute("SELECT user_id FROM users", fetch=True) or []
-    groups = db_execute("SELECT group_id FROM groups", fetch=True) or []
+    users = await db_execute("SELECT user_id FROM users", fetch=True) or []
+    groups = await db_execute("SELECT group_id FROM groups", fetch=True) or []
 
     targets = [u["user_id"] for u in users] + [g["group_id"] for g in groups]
     total = len(targets)
@@ -791,7 +797,7 @@ async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # =========================
     now = int(time.time())
 
-    rows = db_execute(
+    rows = await db_execute(
         "SELECT count, last_time FROM link_spam WHERE chat_id=%s AND user_id=%s",
         (chat_id, user_id),
         fetch=True
@@ -908,7 +914,7 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = update.effective_message
-    groups = db_execute("SELECT group_id FROM groups", fetch=True) or []
+    groups = await db_execute("SELECT group_id FROM groups", fetch=True) or []
 
     refreshed = 0
     removed = 0
