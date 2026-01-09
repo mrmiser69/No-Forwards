@@ -46,22 +46,24 @@ START_IMAGE = "https://i.postimg.cc/q7PtfZYj/Untitled-design-(16).png"
 # ===============================
 # DATABASE POOL (SAFE)
 # ===============================
-def require_env(name: str):
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required env: {name}")
-    return value
+pg_pool = None
 
-pg_pool = SimpleConnectionPool(
-    minconn=1,
-    maxconn=10,
-    host=require_env("SUPABASE_HOST"),
-    database=require_env("SUPABASE_DB"),
-    user=require_env("SUPABASE_USER"),
-    password=require_env("SUPABASE_PASSWORD"),
-    port=require_env("SUPABASE_PORT"),
-    sslmode="require"
-)
+def init_db():
+    global pg_pool
+    try:
+        pg_pool = SimpleConnectionPool(
+            minconn=1,
+            maxconn=10,
+            host=os.getenv("SUPABASE_HOST"),
+            database=os.getenv("SUPABASE_DB"),
+            user=os.getenv("SUPABASE_USER"),
+            password=os.getenv("SUPABASE_PASSWORD"),
+            port=int(os.getenv("SUPABASE_PORT", "5432")),
+            sslmode="require"
+        )
+        print("✅ DB connected")
+    except Exception as e:
+        print("❌ DB connect failed:", e)
 
 # ===============================
 # SAFE DB EXECUTOR (FIXED)
@@ -972,7 +974,8 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ===============================
 def main():
-
+    init_db()
+    
     # ✅ FIX 1: token check BEFORE build
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN missing")
