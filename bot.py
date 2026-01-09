@@ -1009,13 +1009,13 @@ def main():
     # Auto link delete (groups only)
     # -------------------------------
     app.add_handler(
-    MessageHandler(
-        (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP) & (filters.TEXT | filters.CAPTION),
-        auto_delete_links
-    ),
-    group=0
-)
-
+        MessageHandler(
+            (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP)
+            & ~filters.COMMAND,
+            auto_delete_links
+        ),
+        group=0
+    )
 
     # -------------------------------
     # Broadcast (OWNER ONLY)
