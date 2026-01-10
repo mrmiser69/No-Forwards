@@ -35,6 +35,10 @@ REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
 BOT_START_TIME = int(time.time())
 
+from concurrent.futures import ThreadPoolExecutor
+
+DB_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+
 # ===============================
 # CONFIG
 # ===============================
@@ -80,7 +84,7 @@ async def db_execute(query, params=None, fetch=False):
                     return [dict(zip(cols, r)) for r in cur.fetchall()]
                 conn.commit()
 
-    return await loop.run_in_executor(db_execute, _run)
+    return await loop.run_in_executor(DB_EXECUTOR, _run)
 
 # =====================================
 # INIT DB
