@@ -247,22 +247,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = chat.id
     user_id = user.id
 
-    # 🔗 LINK DETECT (Telegram preview included)
-    has_link = False
-    for e in (msg.entities or []) + (msg.caption_entities or []):
-        if e.type in ("url", "text_link"):
-            has_link = True
-            break
-
-    if not has_link:
-        text = (msg.text or msg.caption or "").lower()
-        if "http://" in text or "https://" in text or "t.me/" in text:
-            has_link = True
-
-    if not has_link:
-        return
-
-    # 🤖 BOT ADMIN CHECK
+    # ✅ Bot admin check
     try:
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
         if me.status not in ("administrator", "creator"):
@@ -270,7 +255,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
-    # 👮 USER ADMIN BYPASS
+    # ✅ Admin / owner bypass
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status in ("administrator", "creator"):
@@ -278,16 +263,28 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
-    # 🗑 DELETE MESSAGE (MEMBER ONLY)
-    try:
-        await msg.delete()
-    except:
+    # ✅ Link detect (ALL CASES)
+    has_link = False
+
+    for e in (msg.entities or []) + (msg.caption_entities or []):
+        if e.type in ("url", "text_link"):
+            has_link = True
+            break
+
+    text = (msg.text or msg.caption or "").lower()
+    if "http://" in text or "https://" in text or "t.me/" in text:
+        has_link = True
+
+    if not has_link:
         return
 
-    # ⚠️ COUNT + MUTE (SYNC – NOT create_task)
+    # ✅ Delete
+    await msg.delete()
+
+    # ✅ Count + mute
     await link_spam_control(chat_id, user_id, context)
 
-    await context.bot.send_message(
+    warn = await context.bot.send_message(
         chat_id,
         f"⚠️ <b>{user.first_name}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
         "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
@@ -303,9 +300,10 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     context.job_queue.run_once(
-        delete_message_job,
-        when=DELETE_AFTER,
-    )
+    delete_message_job,
+    when=DELETE_AFTER,
+    data={"chat_id": chat_id, "message_id": warn.message_id}
+)
 
 # ===============================
 # Link Detect + Count + Mute Code
@@ -945,8 +943,7 @@ def main():
     # -------------------------------
     app.add_handler(
         MessageHandler(
-            (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP)
-            & ~filters.COMMAND,
+            filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
             auto_delete_links
         ),
         group=0
