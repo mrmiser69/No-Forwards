@@ -354,17 +354,15 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = chat.id
     user_id = user.id
 
-    # ---- BOT ADMIN CHECK (CACHE FIRST)
-    if chat_id not in BOT_ADMIN_CACHE:
-        try:
-            me = await context.bot.get_chat_member(chat_id, context.bot.id)
-            if not me.can_delete_messages:
-                return
-            BOT_ADMIN_CACHE.add(chat_id)
-        except:
+    # ---------------- BOT ADMIN CHECK ----------------
+    try:
+        me = await context.bot.get_chat_member(chat_id, context.bot.id)
+        if not me.can_delete_messages:
             return
+    except:
+        return
 
-    # ---- ADMIN / OWNER BYPASS (SAFE)
+    # ---------------- ADMIN / OWNER BYPASS ----------------
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status in ("administrator", "creator"):
@@ -372,10 +370,10 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return
 
-    # ---- LINK DETECT (FULL + STABLE)
+    # ---------------- LINK DETECT (RemoveHyperlinkBot STYLE) ----------------
     has_link = False
 
-    # Telegram preview card (IMPORTANT)
+    # Telegram preview card (CRITICAL)
     if msg.web_page is not None:
         has_link = True
 
@@ -393,26 +391,31 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_link:
         return
 
-    # ---- DELETE (NEVER CRASH)
+    # ---------------- DELETE (ABSOLUTE PRIORITY) ----------------
     try:
         await msg.delete()
     except:
         return
 
-    # ---- COUNT + MUTE (ONCE)
-    context.application.create_task(
-        link_spam_control(chat_id, user_id, context)
-    )
+    # ---------------- WARN (OPTIONAL) ----------------
+    try:
+        warn = await context.bot.send_message(
+            chat_id,
+            f"⚠️ <b>{user.first_name}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
+            "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
+            parse_mode="HTML"
+        )
 
-    # ---- WARN
-    warn = await context.bot.send_message(
-        chat_id,
-        f"⚠️ <b>{user.first_name}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
-        "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
-        parse_mode="HTML"
-    )
+        await schedule_delete_message(
+            context,
+            chat_id,
+            warn.message_id,
+            DELETE_AFTER
+        )
+    except:
+        pass
 
-    # ---- SAVE GROUP (BG)
+    # ---------------- BACKGROUND ONLY (NEVER BLOCK DELETE) ----------------
     context.application.create_task(
         db_execute(
             "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
@@ -420,12 +423,8 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     )
 
-    # ---- AUTO DELETE WARN (DB + JOB)
-    await schedule_delete_message(
-        context,
-        chat_id,
-        warn.message_id,
-        DELETE_AFTER
+    context.application.create_task(
+        link_spam_control(chat_id, user_id, context)
     )
 
 # ===============================
@@ -434,7 +433,6 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
 
-    # ---- FETCH (TIMEOUT SAFE)
     try:
         rows = await asyncio.wait_for(
             db_execute(
@@ -444,19 +442,12 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
             ),
             timeout=2
         )
-    except asyncio.TimeoutError:
-        return
-    except Exception:
+    except:
         return
 
-    # ---- COUNT LOGIC
     if rows:
         last = rows[0]
-        if now - last["last_time"] > SPAM_RESET_SECONDS:
-            count = 1
-        else:
-            count = last["count"] + 1
-
+        count = 1 if now - last["last_time"] > SPAM_RESET_SECONDS else last["count"] + 1
         await db_execute(
             "UPDATE link_spam SET count=%s, last_time=%s WHERE chat_id=%s AND user_id=%s",
             (count, now, chat_id, user_id)
@@ -468,51 +459,25 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
             (chat_id, user_id, count, now)
         )
 
-    # ---- LIMIT CHECK
-    if count < LINK_LIMIT:
-        return
+    if count >= LINK_LIMIT:
+        try:
+            chat = await context.bot.get_chat(chat_id)
+            if chat.type != "supergroup":
+                return
 
-    # ---- MUTE ONLY IN SUPERGROUP
-    try:
-        chat = await context.bot.get_chat(chat_id)
-        if chat.type != "supergroup":
-            return
-    except:
-        return
+            await context.bot.restrict_chat_member(
+                chat_id,
+                user_id,
+                ChatPermissions(can_send_messages=False),
+                until_date=now + MUTE_SECONDS
+            )
+        except:
+            pass
 
-    # ---- BOT PERMISSION CHECK
-    try:
-        me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if not me.can_restrict_members:
-            return
-    except:
-        return
-
-    # ---- MUTE
-    try:
-        await context.bot.restrict_chat_member(
-            chat_id,
-            user_id,
-            ChatPermissions(can_send_messages=False),
-            until_date=now + MUTE_SECONDS
+        await db_execute(
+            "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
+            (chat_id, user_id)
         )
-    except:
-        return
-
-    # ---- NOTIFY
-    await context.bot.send_message(
-        chat_id,
-        f"🔇 <b>User muted</b>\n"
-        f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
-        f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီ",
-        parse_mode="HTML"
-    )
-
-    # ---- RESET COUNTER
-    await db_execute(
-        "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
-        (chat_id, user_id)
-    )
 
 # ===============================
 # 🔄 RESTORE JOBS ON START (FIXED)
@@ -1261,8 +1226,7 @@ def main():
     # -------------------------------
     app.add_handler(
         MessageHandler(
-            (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP)
-            & ~filters.StatusUpdate.ALL,
+            filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
             auto_delete_links
         ),
         group=0
