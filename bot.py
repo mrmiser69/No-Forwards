@@ -241,80 +241,53 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat or not msg or not user:
         return
 
-    # ✅ Groups only
     if chat.type not in ("group", "supergroup"):
         return
 
     chat_id = chat.id
     user_id = user.id
 
-    # =========================
-    # 🔐 BOT ADMIN CHECK (FIRST)
-    # =========================
-    if chat_id not in BOT_ADMIN_CACHE:
-        try:
-            me = await context.bot.get_chat_member(chat_id, context.bot.id)
-            if me.status not in ("administrator", "creator"):
-                return
-            BOT_ADMIN_CACHE.add(chat_id)
-        except:
-            return
-
-    # =========================
-    # 👮 ADMIN / OWNER BYPASS
-    # =========================
-    admins = USER_ADMIN_CACHE.setdefault(chat_id, set())
-    if user_id in admins:
-        return
-
-    try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status in ("administrator", "creator"):
-            admins.add(user_id)
-            return
-    except:
-        return
-
-    # =========================
-    # 🔗 LINK DETECTION (100%)
-    # =========================
+    # 🔗 LINK DETECT (Telegram preview included)
     has_link = False
-
     for e in (msg.entities or []) + (msg.caption_entities or []):
         if e.type in ("url", "text_link"):
             has_link = True
             break
 
-    text = (msg.text or msg.caption or "").lower()
-    if not has_link and ("http://" in text or "https://" in text or "t.me/" in text):
-        has_link = True
-
-    # 🔥 Telegram preview card (THIS WAS THE BUG)
-    if msg.web_page is not None:
-        has_link = True
+    if not has_link:
+        text = (msg.text or msg.caption or "").lower()
+        if "http://" in text or "https://" in text or "t.me/" in text:
+            has_link = True
 
     if not has_link:
         return
 
-    # =========================
-    # 🗑 DELETE MESSAGE
-    # =========================
+    # 🤖 BOT ADMIN CHECK
+    try:
+        me = await context.bot.get_chat_member(chat_id, context.bot.id)
+        if me.status not in ("administrator", "creator"):
+            return
+    except:
+        return
+
+    # 👮 USER ADMIN BYPASS
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status in ("administrator", "creator"):
+            return
+    except:
+        return
+
+    # 🗑 DELETE MESSAGE (MEMBER ONLY)
     try:
         await msg.delete()
     except:
         return
 
-    # =========================
-    # ⚠️ LINK SPAM COUNT + MUTE
-    # =========================
-    context.application.create_task(
-        link_spam_control(update, context)
-    )
-    
-    # ===========================
-    # ⚠️ WARN
-    # ===========================
-    warn = await context.bot.send_message(
+    # ⚠️ COUNT + MUTE (SYNC – NOT create_task)
+    await link_spam_control(chat_id, user_id, context)
+
+    await context.bot.send_message(
         chat_id,
         f"⚠️ <b>{user.first_name}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
         "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
@@ -332,8 +305,62 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.run_once(
         delete_message_job,
         when=DELETE_AFTER,
-        data={"chat_id": chat_id, "message_id": warn.message_id}
     )
+
+# ===============================
+# Link Detect + Count + Mute Code
+# ===============================
+LINK_LIMIT = 3
+MUTE_SECONDS = 600
+SPAM_RESET_SECONDS = 3600
+
+async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    now = int(time.time())
+
+    rows = await db_execute(
+        "SELECT count, last_time FROM link_spam WHERE chat_id=%s AND user_id=%s",
+        (chat_id, user_id),
+        fetch=True
+    ) or []
+
+    if rows:
+        last = rows[0]
+        if now - last["last_time"] > SPAM_RESET_SECONDS:
+            count = 1
+        else:
+            count = last["count"] + 1
+
+        await db_execute(
+            "UPDATE link_spam SET count=%s, last_time=%s WHERE chat_id=%s AND user_id=%s",
+            (count, now, chat_id, user_id)
+        )
+    else:
+        count = 1
+        await db_execute(
+            "INSERT INTO link_spam VALUES (%s,%s,%s,%s)",
+            (chat_id, user_id, count, now)
+        )
+
+    if count >= LINK_LIMIT:
+        await context.bot.restrict_chat_member(
+            chat_id,
+            user_id,
+            ChatPermissions(can_send_messages=False),
+            until_date=now + MUTE_SECONDS
+        )
+
+        await context.bot.send_message(
+            chat_id,
+            f"🔇 <b>User muted</b>ကို\n"
+            f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
+            f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီ",
+            parse_mode="HTML"
+        )
+
+        await db_execute(
+            "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
+            (chat_id, user_id)
+        )
 
 # ===============================
 # 🔄 RESTORE JOBS ON START (OK)
@@ -778,103 +805,6 @@ async def is_bot_admin(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool
         return False
     except:
         return False
-
-# ===============================
-# Link Detect + Count + Mute Code
-# ===============================
-LINK_LIMIT = 3
-MUTE_SECONDS = 600
-SPAM_RESET_SECONDS = 3600
-
-async def link_spam_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    message = update.effective_message
-
-    if not chat or not user or not message:
-        return
-
-    if chat.type != "supergroup":   # ⚡ mute only needs supergroup
-        return
-
-    chat_id = chat.id
-    user_id = user.id
-
-    # =========================
-    # 👤 Admin bypass (CACHE FIRST)
-    # =========================
-    admins = USER_ADMIN_CACHE.setdefault(chat_id, set())
-    if user_id in admins:
-        return
-
-    try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status in ("administrator", "creator"):
-            admins.add(user_id)
-            return
-    except:
-        return
-
-    # =========================
-    # ⚡ DB ACCESS (ONLY HERE)
-    # =========================
-    now = int(time.time())
-
-    rows = await db_execute(
-        "SELECT count, last_time FROM link_spam WHERE chat_id=%s AND user_id=%s",
-        (chat_id, user_id),
-        fetch=True
-    ) or []
-
-    if rows:
-        row = rows[0]
-        if now - row["last_time"] > SPAM_RESET_SECONDS:
-            count = 1
-        else:
-            count = row["count"] + 1
-
-        context.application.create_task(
-            db_execute(
-                "UPDATE link_spam SET count=%s, last_time=%s WHERE chat_id=%s AND user_id=%s",
-                (count, now, chat_id, user_id)
-            )
-        )
-    else:
-        count = 1
-        context.application.create_task(
-            db_execute(
-                "INSERT INTO link_spam VALUES (%s,%s,%s,%s)",
-                (chat_id, user_id, count, now)
-            )
-        )
-
-    # =========================
-    # 🚨 MUTE (INSTANT)
-    # =========================
-    if count >= LINK_LIMIT:
-        until = now + MUTE_SECONDS
-
-        await context.bot.restrict_chat_member(
-            chat_id=chat_id,
-            user_id=user_id,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until
-        )
-
-        await context.bot.send_message(
-            chat_id,
-            f"🔇 <b>{user.first_name}</b>ကို\n"
-            f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
-            f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီ",
-            parse_mode="HTML"
-        )
-
-        context.application.create_task(
-            db_execute(
-                "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
-                (chat_id, user_id)
-            )
-        )
 
 # ===============================
 # /refresh (ADMIN ONLY - FAST)
