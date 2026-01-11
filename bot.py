@@ -239,7 +239,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 DELETE_AFTER = 10800  # 3 hour (warn delete faster)
 
 # ===============================
-# schedule delete message
+# schedule delete message (SAFE)
 # ===============================
 async def schedule_delete_message(
     context: ContextTypes.DEFAULT_TYPE,
@@ -249,14 +249,19 @@ async def schedule_delete_message(
 ):
     run_at = int(time.time()) + delay
 
-    # save to DB (for restore after restart)
+    # ✅ save to DB (for restore after restart)
     context.application.create_task(
         db_execute(
-            "INSERT INTO delete_jobs VALUES (%s,%s,%s)",
+            "INSERT INTO delete_jobs (chat_id, message_id, run_at) VALUES (%s,%s,%s)",
             (chat_id, message_id, run_at)
         )
     )
 
+    # ❗ JobQueue မရှိရင် silent skip (bot မပျက်)
+    if context.job_queue is None:
+        return
+
+    # ✅ schedule delete
     context.job_queue.run_once(
         delete_message_job,
         when=delay,
