@@ -249,25 +249,16 @@ async def schedule_delete_message(
 ):
     run_at = int(time.time()) + delay
 
-    # ✅ save to DB (for restore after restart)
+    # DB မှာပဲ save (restart အတွက်)
     context.application.create_task(
         db_execute(
-            "INSERT INTO delete_jobs (chat_id, message_id, run_at) VALUES (%s,%s,%s)",
+            "INSERT INTO delete_jobs VALUES (%s,%s,%s)",
             (chat_id, message_id, run_at)
         )
     )
 
-    # ❗ JobQueue မရှိရင် silent skip (bot မပျက်)
-    if context.job_queue is None:
-        return
-
-    # ✅ schedule delete
-    context.job_queue.run_once(
-        delete_message_job,
-        when=delay,
-        data={"chat_id": chat_id, "message_id": message_id},
-        name=f"del_{chat_id}_{message_id}"
-    )
+    # ❗ JobQueue မသုံးတော့ဘူး
+    # delete job ကို schedule မလုပ်
 
 # ===============================
 # LINK + MUTE CONFIG
@@ -456,7 +447,7 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
     )
 
 # ===============================
-# 🔄 RESTORE JOBS ON START (FIXED)
+# 🔄 RESTORE JOBS ON START (SAFE – NO JOBQUEUE)
 # ===============================
 async def restore_jobs(app):
     now = int(time.time())
@@ -475,24 +466,21 @@ async def restore_jobs(app):
 
     for row in rows:
         run_at = row["run_at"]
-        delay = run_at - now
 
-        # ❗️ skip expired jobs (clean DB)
-        if delay <= 0:
+        # expired → clean DB only
+        if run_at <= now:
             await db_execute(
                 "DELETE FROM delete_jobs WHERE chat_id=%s AND message_id=%s",
                 (row["chat_id"], row["message_id"])
             )
             continue
 
-        app.job_queue.run_once(
-            delete_message_job,
-            when=delay,
-            data={
-                "chat_id": row["chat_id"],
-                "message_id": row["message_id"]
-            },
-            name=f"del_{row['chat_id']}_{row['message_id']}"
+        # ❗ JobQueue မရှိတဲ့အတွက်
+        # Bot restart ပြီးတဲ့ message delete ကို SKIP
+        # (Bot crash မဖြစ်အောင်)
+        print(
+            f"ℹ️ Skip restore delete job "
+            f"(chat={row['chat_id']}, msg={row['message_id']})"
         )
 
 # ===============================
