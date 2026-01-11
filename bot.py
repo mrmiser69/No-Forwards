@@ -1192,8 +1192,7 @@ def main():
     # -------------------------------
     app.add_handler(
         MessageHandler(
-            (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP)
-            & filters.UpdateType.EDITED_MESSAGE,
+            filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
             auto_delete_links
         ),
         group=0
