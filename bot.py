@@ -14,6 +14,7 @@ from telegram import (
     InlineKeyboardButton,
     ChatPermissions,
 )
+from telegram.error import BadRequest
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
     ApplicationBuilder,
@@ -321,7 +322,14 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # 🔥 DELETE FIRST (NO DB, NO BLOCK)
-    await msg.delete()
+    try:
+        await msg.delete()
+    except BadRequest as e:
+        print("ℹ️ Delete skipped:", e)
+        return
+    except Exception as e:
+        print("❌ Delete failed:", e)
+        return
 
     # WARN
     warn = await context.bot.send_message(
