@@ -289,14 +289,12 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
 
     # BOT ADMIN CHECK
-    if chat_id not in BOT_ADMIN_CACHE:
-        try:
-            me = await context.bot.get_chat_member(chat_id, context.bot.id)
-            if me.status not in ("administrator", "creator"):
-                return
-            BOT_ADMIN_CACHE.add(chat_id)
-        except:
+    try:
+        me = await context.bot.get_chat_member(chat_id, context.bot.id)
+        if me.status not in ("administrator", "creator"):
             return
+    except:
+        return
 
     # ADMIN BYPASS
     try:
