@@ -369,34 +369,25 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ===============================
-# LINK COUNT + MUTE (FIXED)
+# LINK COUNT + MUTE (STABLE)
 # ===============================
 async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
 
-    # ---- FETCH (TIMEOUT SAFE)
+    # ---- FETCH
     try:
-        rows = await asyncio.wait_for(
-            db_execute(
-                "SELECT count, last_time FROM link_spam WHERE chat_id=%s AND user_id=%s",
-                (chat_id, user_id),
-                fetch=True
-            ),
-            timeout=2
+        rows = await db_execute(
+            "SELECT count, last_time FROM link_spam WHERE chat_id=%s AND user_id=%s",
+            (chat_id, user_id),
+            fetch=True
         )
-    except asyncio.TimeoutError:
-        return
-    except Exception:
+    except:
         return
 
-    # ---- COUNT LOGIC
+    # ---- COUNT
     if rows:
         last = rows[0]
-        if now - last["last_time"] > SPAM_RESET_SECONDS:
-            count = 1
-        else:
-            count = last["count"] + 1
-
+        count = 1 if now - last["last_time"] > SPAM_RESET_SECONDS else last["count"] + 1
         await db_execute(
             "UPDATE link_spam SET count=%s, last_time=%s WHERE chat_id=%s AND user_id=%s",
             (count, now, chat_id, user_id)
@@ -408,22 +399,13 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
             (chat_id, user_id, count, now)
         )
 
-    # ---- LIMIT CHECK
     if count < LINK_LIMIT:
         return
 
-    # ---- MUTE ONLY IN SUPERGROUP
+    # ---- SUPERGROUP ONLY
     try:
         chat = await context.bot.get_chat(chat_id)
         if chat.type != "supergroup":
-            return
-    except:
-        return
-
-    # ---- BOT PERMISSION CHECK
-    try:
-        me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if not me.can_restrict_members:
             return
     except:
         return
@@ -439,16 +421,19 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
     except:
         return
 
-    # ---- NOTIFY
-    await context.bot.send_message(
-        chat_id,
-        f"🔇 <b>User muted</b>\n"
-        f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
-        f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီ",
-        parse_mode="HTML"
-    )
+    # ---- WARN (FAIL-SAFE)
+    try:
+        await context.bot.send_message(
+            chat_id,
+            f"🔇 <b>User muted</b>ကို\n"
+            f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
+            f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီ",
+            parse_mode="HTML"
+        )
+    except:
+        pass  # ❗ warn မပို့ရလည်း mute မပျက်
 
-    # ---- RESET COUNTER
+    # ---- RESET
     await db_execute(
         "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
         (chat_id, user_id)
