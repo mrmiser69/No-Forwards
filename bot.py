@@ -157,10 +157,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         ])
 
-    # ⬇️ URL → CALLBACK (ဒီနှစ်ခုပဲ ပြောင်း)
     buttons.append([
-        InlineKeyboardButton("👨‍💻 DEVELOPER", callback_data="go_dev"),
-        InlineKeyboardButton("📢 CHANNEL", callback_data="go_channel"),
+        InlineKeyboardButton("👨‍💻 DEVELOPER", url="https://t.me/callmeoggy"),
+        InlineKeyboardButton("📢 CHANNEL", url="https://t.me/MMTelegramBotss"),
     ])
 
     await msg.reply_photo(
@@ -168,24 +167,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-# ===============================
-# Start Developer Cb
-# ===============================
-async def go_dev_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer(
-        url="https://t.me/callmeoggy"
-    )
-
-# ===============================
-# Start Channel Cb
-# ===============================
-async def go_channel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer(
-        url="https://t.me/MMTelegramBotss"
     )
 
 # ===============================
@@ -1209,12 +1190,6 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("refresh", refresh))
     app.add_handler(CommandHandler("refresh_all", refresh_all))
-    
-    # -------------------------------
-    # CallBack Query
-    # -------------------------------
-    app.add_handler(CallbackQueryHandler(go_dev_cb, pattern="^go_dev$"))
-    app.add_handler(CallbackQueryHandler(go_channel_cb, pattern="^go_channel$"))
    
     # -------------------------------
     # Auto link delete (GROUP + SUPERGROUP ONLY)
