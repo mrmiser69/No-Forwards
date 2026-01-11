@@ -53,9 +53,9 @@ DB_USER = os.getenv("SUPABASE_USER")
 DB_PASS = os.getenv("SUPABASE_PASSWORD")
 DB_PORT = int(os.getenv("SUPABASE_PORT", "6543"))
 
-# ===============================
-# DB POOL (SAFE – NON BLOCKING CORE)
-# ===============================
+# =====================================
+# DB POOL (RAILWAY SAFE)
+# =====================================
 pool = ConnectionPool(
     conninfo=(
         f"host={DB_HOST} "
@@ -68,6 +68,9 @@ pool = ConnectionPool(
     min_size=1,
     max_size=5,
     timeout=5,
+    kwargs={                      
+        "prepare_threshold": None 
+    }
 )
 
 async def db_execute(query, params=None, fetch=False):
@@ -156,8 +159,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ⬇️ URL → CALLBACK (ဒီနှစ်ခုပဲ ပြောင်း)
     buttons.append([
-        InlineKeyboardButton("👨‍💻 DEVELOPER", callback_data="start_developer"),
-        InlineKeyboardButton("📢 CHANNEL", callback_data="start_channel"),
+        InlineKeyboardButton("👨‍💻 DEVELOPER", callback_data="go_dev"),
+        InlineKeyboardButton("📢 CHANNEL", callback_data="go_channel"),
     ])
 
     await msg.reply_photo(
@@ -170,48 +173,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 # Start Developer Cb
 # ===============================
-async def start_developer_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def go_dev_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text(
-        "<b>👨‍💻 Developer</b>\n\n"
-        "Telegram : @callmeoggy",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Back", callback_data="start_back")]
-        ])
+    await query.answer(
+        url="https://t.me/callmeoggy"
     )
 
 # ===============================
 # Start Channel Cb
 # ===============================
-async def start_channel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def go_channel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text(
-        "<b>📢 Channel</b>\n\n"
-        "Telegram : @MMTelegramBotss",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Back", callback_data="start_back")]
-        ])
-    )
-
-# ===============================
-# Start Back Cb
-# ===============================
-async def start_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    await start(
-        Update(
-            update.update_id,
-            message=query.message
-        ),
-        context
+    await query.answer(
+        url="https://t.me/MMTelegramBotss"
     )
 
 # ===============================
@@ -1239,9 +1213,8 @@ def main():
     # -------------------------------
     # CallBack Query
     # -------------------------------
-    app.add_handler(CallbackQueryHandler(start_developer_cb, pattern="^start_developer$"))
-    app.add_handler(CallbackQueryHandler(start_channel_cb, pattern="^start_channel$"))
-    app.add_handler(CallbackQueryHandler(start_back_cb, pattern="^start_back$"))
+    app.add_handler(CallbackQueryHandler(go_dev_cb, pattern="^go_dev$"))
+    app.add_handler(CallbackQueryHandler(go_channel_cb, pattern="^go_channel$"))
    
     # -------------------------------
     # Auto link delete (GROUP + SUPERGROUP ONLY)
