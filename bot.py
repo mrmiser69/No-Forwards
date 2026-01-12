@@ -240,7 +240,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 # ⏱️ DELETE JOB CONFIG
 # ===============================
-DELETE_AFTER = 10800  # 3 hour (warn delete faster)
+DELETE_AFTER = 18000  # 5 hour 
 
 # ===============================
 # schedule delete message (SAFE)
