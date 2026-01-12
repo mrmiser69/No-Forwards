@@ -759,13 +759,19 @@ async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
         print(f"⚠️ Leave chat failed ({chat_id}):", e)
 
 # ===============================
-# Helper: Clear all reminder jobs (FIXED)
+# Helper: Clear all reminder jobs (SAFE)
 # ===============================
 def clear_reminders(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    for job in list(context.job_queue.jobs()):
+    job_queue = context.job_queue
+
+    # ❗ JobQueue မရှိရင် ဘာမှမလုပ်
+    if job_queue is None:
+        return
+
+    for job in list(job_queue.jobs()):
         data = job.data or {}
 
-        # only reminder / auto-leave jobs
+        # only jobs for this chat
         if data.get("chat_id") != chat_id:
             continue
 
