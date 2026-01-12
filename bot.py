@@ -814,6 +814,15 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         BOT_ADMIN_CACHE.add(chat.id)
         clear_reminders(context, chat.id)
 
+        # 🔥 DELETE ADMIN REQUEST MESSAGES
+        if chat.id in REMINDER_MESSAGES:
+            for mid in REMINDER_MESSAGES[chat.id]:
+                try:
+                    await context.bot.delete_message(chat.id, mid)
+                except:
+                    pass
+            REMINDER_MESSAGES.pop(chat.id, None)
+
         context.application.create_task(
             db_execute(
                 "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
