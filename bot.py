@@ -158,7 +158,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
     buttons.append([
-        InlineKeyboardButton("👨‍💻 DEVELOPER", url="https://t.me/callmeoggy"),
+        InlineKeyboardButton("👨‍💻 DEVELOPER", url="tg://user?id=5942810488"),
         InlineKeyboardButton("📢 CHANNEL", url="https://t.me/MMTelegramBotss"),
     ])
 
