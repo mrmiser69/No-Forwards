@@ -158,8 +158,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
     buttons.append([
-        InlineKeyboardButton("👨‍💻 DEVELOPER", url="tg://user?id=5942810488"),
-        InlineKeyboardButton("📢 CHANNEL", url="https://t.me/MMTelegramBotss"),
+        InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
+        InlineKeyboardButton("📢 𝐂𝐡𝐚𝐧𝐧𝐞𝐥", url="https://t.me/MMTelegramBotss"),
     ])
 
     await msg.reply_photo(
