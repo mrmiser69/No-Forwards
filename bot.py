@@ -97,7 +97,9 @@ async def init_db():
 
     await db_execute("""
         CREATE TABLE IF NOT EXISTS groups (
-            group_id BIGINT PRIMARY KEY
+            group_id BIGINT PRIMARY KEY,
+            is_admin_cached BOOLEAN DEFAULT FALSE,
+            last_checked_at BIGINT
         )
     """)
 
@@ -537,7 +539,7 @@ async def save_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ DB save (background, never block)
     context.application.create_task(
         db_execute(
-            "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+            "INSERT INTO groups (group_id) VALUES (%s)ON CONFLICT (group_id) DO NOTHING",
             (chat.id,)
         )
     )
@@ -1137,7 +1139,7 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             context.application.create_task(
                 db_execute(
-                    "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
+                    "INSERT INTO groups (group_id) VALUES (%s)ON CONFLICT (group_id) DO NOTHING",
                     (chat_id,)
                 )
             )
