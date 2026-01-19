@@ -394,11 +394,18 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 💾 DB SAVE (ADMIN ONLY – SAFE)
     
     context.application.create_task(
-        db_execute(
-            "INSERT INTO groups (group_id) VALUES (%s) ON CONFLICT DO NOTHING",
-            (chat_id,)
+            db_execute(
+                """
+                INSERT INTO groups (group_id, is_admin_cached, last_checked_at)
+                VALUES (%s, TRUE, %s)
+                ON CONFLICT (group_id)
+                DO UPDATE SET
+                    is_admin_cached = TRUE,
+                    last_checked_at = EXCLUDED.last_checked_at
+                """,
+                (chat.id, int(time.time()))
+            )
         )
-    )
 
     # ---- AUTO DELETE WARN
     if warn:
@@ -538,11 +545,18 @@ async def save_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ✅ DB save (background, never block)
     context.application.create_task(
-        db_execute(
-            "INSERT INTO groups (group_id) VALUES (%s)ON CONFLICT (group_id) DO NOTHING",
-            (chat.id,)
+            db_execute(
+                """
+                INSERT INTO groups (group_id, is_admin_cached, last_checked_at)
+                VALUES (%s, TRUE, %s)
+                ON CONFLICT (group_id)
+                DO UPDATE SET
+                    is_admin_cached = TRUE,
+                    last_checked_at = EXCLUDED.last_checked_at
+                """,
+                (chat.id, int(time.time()))
+            )
         )
-    )
 
 # ===============================
 # Progress Bar Helper 
@@ -1139,8 +1153,15 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             context.application.create_task(
                 db_execute(
-                    "INSERT INTO groups (group_id) VALUES (%s)ON CONFLICT (group_id) DO NOTHING",
-                    (chat_id,)
+                    """
+                    INSERT INTO groups (group_id, is_admin_cached, last_checked_at)
+                    VALUES (%s, TRUE, %s)
+                    ON CONFLICT (group_id)
+                    DO UPDATE SET
+                        is_admin_cached = TRUE,
+                        last_checked_at = EXCLUDED.last_checked_at
+                    """,
+                    (chat_id, int(time.time()))
                 )
             )
         else:
@@ -1174,30 +1195,51 @@ async def refresh_admin_cache(app):
     verified = 0
     skipped = 0
 
+    now = int(time.time())
+
     for row in rows:
         gid = row["group_id"]
 
         try:
             me = await app.bot.get_chat_member(gid, app.bot.id)
 
-            # ✅ Admin ဖြစ်ရင် cache ထဲထည့်
             if me.status in ("administrator", "creator"):
+                # ✅ ADMIN
                 BOT_ADMIN_CACHE.add(gid)
                 verified += 1
+
+                await db_execute(
+                    """
+                    UPDATE groups
+                    SET is_admin_cached = TRUE,
+                        last_checked_at = %s
+                    WHERE group_id = %s
+                    """,
+                    (now, gid)
+                )
+
             else:
-                # ❌ NOT ADMIN → cache မထည့်ပဲ skip
+                # ❌ NOT ADMIN (IMPORTANT FIX)
                 skipped += 1
+                await db_execute(
+                    """
+                    UPDATE groups
+                    SET is_admin_cached = FALSE,
+                        last_checked_at = %s
+                    WHERE group_id = %s
+                    """,
+                    (now, gid)
+                )
 
         except Exception as e:
-            # ❗ API error / private group / rate limit
-            # ❌ DB မဖျက် ❌
+            # ❗ API error → DB မထိ
             print(f"⚠️ Skip admin check for {gid}: {e}")
             skipped += 1
 
-        await asyncio.sleep(0.1)  # rate-limit safe
+        await asyncio.sleep(0.1)
 
     print(f"✅ Admin cache verified: {verified}")
-    print(f"⚠️ Skipped (kept in DB): {skipped}")
+    print(f"⚠️ Non-admin groups marked: {skipped}")
 
 # ===============================
 # /refresh_all (OWNER ONLY - FINAL SAFE VERSION)
