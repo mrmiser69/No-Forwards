@@ -1155,7 +1155,7 @@ async def refresh_admin_cache(app):
     print(f"⚠️ Skipped (kept in DB): {skipped}")
 
 # ===============================
-# /refresh_all (OWNER ONLY - SAFE)
+# /refresh_all (OWNER ONLY - SAVE ADMIN GROUPS)
 # ===============================
 async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or update.effective_user.id != OWNER_ID:
@@ -1168,9 +1168,9 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fetch=True
     ) or []
 
-    BOT_ADMIN_CACHE.clear()  # reset cache only
+    BOT_ADMIN_CACHE.clear()
 
-    verified = 0
+    verified_groups = []   # 🔥 admin groups to save
     skipped = 0
 
     for row in rows:
@@ -1179,25 +1179,33 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             me = await context.bot.get_chat_member(gid, context.bot.id)
 
-            # ✅ Admin ဖြစ်ရင် cache ထဲထည့်
             if me.status in ("administrator", "creator"):
                 BOT_ADMIN_CACHE.add(gid)
-                verified += 1
+                verified_groups.append(gid)   # ✅ collect
             else:
-                # ❌ Not admin → skip only (NO DB DELETE)
                 skipped += 1
 
         except Exception as e:
-            # ❗ API error / bot can’t access group
-            # ❌ DB မဖျက်
             print(f"⚠️ refresh_all skip {gid}: {e}")
             skipped += 1
 
         await asyncio.sleep(0.1)  # rate-limit safe
 
+    # ===============================
+    # 🔥 BULK SAVE (ONE SHOT)
+    # ===============================
+    if verified_groups:
+        values = ",".join(["(%s)"] * len(verified_groups))
+        query = f"""
+            INSERT INTO groups (group_id)
+            VALUES {values}
+            ON CONFLICT DO NOTHING
+        """
+        await db_execute(query, tuple(verified_groups))
+
     await msg.reply_text(
         "🔄 <b>Refresh All Completed</b>\n\n"
-        f"✅ Verified admin groups: {verified}\n"
+        f"✅ Admin groups saved: {len(verified_groups)}\n"
         f"⚠️ Skipped (kept in DB): {skipped}",
         parse_mode="HTML"
     )
