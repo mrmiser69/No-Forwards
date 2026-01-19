@@ -238,7 +238,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ✅ CACHE-SAFE COUNT
-    admin_groups = len(BOT_ADMIN_CACHE)
+    rows = await db_execute(
+        "SELECT COUNT(*) AS c FROM groups WHERE is_admin_cached = TRUE",
+        fetch=True
+    )
+    admin_groups = rows[0]["c"] if rows else 0
+
     no_admin_groups = max(0, group_count - admin_groups)
 
     uptime = int(time.time()) - BOT_START_TIME
@@ -792,7 +797,15 @@ async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
 
     # 🧹 Supabase cleanup (background, non-blocking)
     context.application.create_task(
-        db_execute("DELETE FROM groups WHERE group_id=%s", (chat_id,))
+        db_execute(
+            """
+            UPDATE groups
+            SET is_admin_cached = FALSE,
+                last_checked_at = %s
+            WHERE group_id = %s
+            """,
+            (int(time.time()), chat_id)
+        )
     )
     context.application.create_task(
         db_execute("DELETE FROM link_spam WHERE chat_id=%s", (chat_id,))
@@ -871,8 +884,15 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.application.create_task(
             db_execute(
-                "INSERT INTO groups VALUES (%s) ON CONFLICT DO NOTHING",
-                (chat.id,)
+                """
+                INSERT INTO groups (group_id, is_admin_cached, last_checked_at)
+                VALUES (%s, TRUE, %s)
+                ON CONFLICT (group_id)
+                DO UPDATE SET
+                    is_admin_cached = TRUE,
+                    last_checked_at = EXCLUDED.last_checked_at
+                """,
+                (chat.id, int(time.time()))
             )
         )
 
