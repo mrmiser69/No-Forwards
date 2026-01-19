@@ -579,9 +579,33 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===============================
-# Broadcast Confirm
+# Broadcast Confirm → Choose Target
 # ===============================
 async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if OWNER_ID not in PENDING_BROADCAST:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 Users only", callback_data="bc_target_users")],
+        [InlineKeyboardButton("👥 Groups only", callback_data="bc_target_groups")],
+        [InlineKeyboardButton("👥👤 Users + Groups", callback_data="bc_target_all")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="broadcast_cancel")]
+    ])
+
+    await query.edit_message_text(
+        "📢 <b>Broadcast Target ကိုရွေးပါ</b>",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+# ===============================
+# Broadcast Target Handler
+# ===============================
+async def broadcast_target_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -590,13 +614,20 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_text("❌ Broadcast data မရှိပါ")
         return
 
+    target_type = query.data  # bc_target_users / groups / all
+
     users = await db_execute("SELECT user_id FROM users", fetch=True) or []
     groups = await db_execute("SELECT group_id FROM groups", fetch=True) or []
 
-    targets = list(set(
-        [u["user_id"] for u in users] +
-        [g["group_id"] for g in groups]
-    ))
+    if target_type == "bc_target_users":
+        targets = [u["user_id"] for u in users]
+    elif target_type == "bc_target_groups":
+        targets = [g["group_id"] for g in groups]
+    else:
+        targets = list(set(
+            [u["user_id"] for u in users] +
+            [g["group_id"] for g in groups]
+        ))
 
     total = len(targets)
     sent = 0
@@ -605,8 +636,6 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
         "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
         parse_mode="HTML"
     )
-
-    start_time = time.time()
 
     async def progress_updater():
         while sent < total:
@@ -622,6 +651,7 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
     progress_task = asyncio.create_task(progress_updater())
 
     BATCH_SIZE = 10
+    start_time = time.time()
 
     for i in range(0, total, BATCH_SIZE):
         batch = targets[i:i + BATCH_SIZE]
@@ -633,7 +663,7 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
 
         for cid, result in zip(batch, results):
             sent += 1
-            if isinstance(result, Exception):
+            if result is None or isinstance(result, Exception):
                 context.application.create_task(
                     db_execute("DELETE FROM users WHERE user_id=%s", (cid,))
                 )
@@ -646,10 +676,10 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
         await progress_task
 
     elapsed = int(time.time() - start_time)
+
     await progress_msg.edit_text(
         "✅ <b>Broadcast Completed</b>\n\n"
-        f"👤 Users: {len(users)}\n"
-        f"👥 Groups: {len(groups)}\n"
+        f"🎯 Target: {total}\n"
         f"⏱️ Time: {elapsed // 60}m {elapsed % 60}s",
         parse_mode="HTML"
     )
@@ -1226,28 +1256,20 @@ def main():
     # -------------------------------
     # Broadcast (OWNER ONLY)
     # -------------------------------
-    app.add_handler(
-        MessageHandler(
-            filters.User(OWNER_ID)
-            & (filters.TEXT | filters.CAPTION)
-            & filters.Regex(r"^/broadcast"),
-            broadcast
-        )
-    )
+    app.add_handler(CallbackQueryHandler(
+        broadcast_confirm_handler,
+        pattern="broadcast_confirm"
+    ))
 
-    app.add_handler(
-        CallbackQueryHandler(
-            broadcast_confirm_handler,
-            pattern="broadcast_confirm"
-        )
-    )
+    app.add_handler(CallbackQueryHandler(
+        broadcast_target_handler,
+        pattern="^bc_target_"
+    ))
 
-    app.add_handler(
-        CallbackQueryHandler(
-            broadcast_cancel_handler,
-            pattern="broadcast_cancel"
-        )
-    )
+    app.add_handler(CallbackQueryHandler(
+        broadcast_cancel_handler,
+        pattern="broadcast_cancel"
+    ))
 
     # -------------------------------
     # Bot admin / permission tracking
