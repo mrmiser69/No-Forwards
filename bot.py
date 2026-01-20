@@ -1350,6 +1350,9 @@ def main():
     # Startup jobs (ORDER IS CRITICAL)
     # -------------------------------
     async def on_startup(app):
+        
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        
         try:
             await init_db()
         except Exception as e:
