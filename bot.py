@@ -387,14 +387,14 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # ---- DELETE WARN
     try:
-        warn = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id,
             f"⚠️ <b>{user_mention}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
             "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
             parse_mode="HTML"
         )
     except:
-        warn = None
+        pass
 
     # ---- COUNT + MUTE (SYNC)
     muted = await link_spam_control(chat_id, user_id, context)
@@ -499,39 +499,6 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
     )
 
     return True  # 🔥 IMPORTANT
-
-# ===============================
-# Save Group (ADMIN ONLY)
-# ===============================
-async def save_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if not chat or chat.type not in ("group", "supergroup"):
-        return
-
-    try:
-        me = await context.bot.get_chat_member(chat.id, context.bot.id)
-        if me.status not in ("administrator", "creator"):
-            return
-    except:
-        return
-
-    # ✅ cache update
-    BOT_ADMIN_CACHE.add(chat.id)
-
-    # ✅ DB save (background, never block)
-    context.application.create_task(
-            db_execute(
-                """
-                INSERT INTO groups (group_id, is_admin_cached, last_checked_at)
-                VALUES (%s, TRUE, %s)
-                ON CONFLICT (group_id)
-                DO UPDATE SET
-                    is_admin_cached = TRUE,
-                    last_checked_at = EXCLUDED.last_checked_at
-                """,
-                (chat.id, int(time.time()))
-            )
-        )
 
 # ===============================
 # Progress Bar Helper 
