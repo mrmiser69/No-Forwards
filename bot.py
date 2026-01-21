@@ -200,10 +200,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ---------------------------
         if is_admin:
             text = (
-                "✅ <b>Bot သည် Admin အဖြစ် ခန့်ထားပြီးသားပါ</b>\n\n"
-                "🔗 Auto Link Delete\n"
-                "🔇 Spam Link Mute\n\n"
-                "🤖 Bot က လက်ရှိ Group မှာ အလုပ်လုပ်နေပါပြီ။"
+                "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
+                "🔗 <b>Auto Link Delete</b>\n"
+                "🔇 <b>Spam Link Mute</b>\n\n"
+                "🤖 Bot က လက်ရှိ Group မှာ ကောင်းကောင်းအလုပ်လုပ်နေပါပြီး။"
             )
 
             await msg.reply_text(
@@ -217,7 +217,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ---------------------------
         text = (
             "⚠️ <b>Bot သည် Admin မဟုတ်သေးပါ</b>\n\n"
-            "🤖 Bot ကို အလုပ်လုပ်စေရန်\n"
+            "🤖 <b>Bot ကို အလုပ်လုပ်စေရန်</b>\n"
             "⭐️ <b>Admin Permission ပေးပါ</b>\n\n"
             "Required: Delete messages"
         )
@@ -389,7 +389,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id,
-            f"⚠️ <b>{user_mention}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီ။\n"
+            f"⚠️ <b>{user_mention}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီး။\n"
             "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
             parse_mode="HTML"
         )
@@ -406,7 +406,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id,
                 f"🔇 <b>{user_mention}</b> ကို\n"
                 f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
-                f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီ",
+                f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီး",
                 parse_mode="HTML"
             )
         except:
@@ -868,7 +868,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat.id,
                 "✅ <b>Thank you!</b>\n\n"
                 "🤖 Bot ကို <b>Admin</b> အဖြစ် ခန့်ထားပြီးပါပြီး။\n"
-                "🔗 Auto Link Delete & Spam Link Mute စနစ် စတင်အလုပ်လုပ်နေပါပြီ..........!",
+                "🔗 Auto Link Delete & Spam Link Mute စနစ် စတင်အလုပ်လုပ်နေပါပြီး..........!",
                 parse_mode="HTML"
             )
         except:
