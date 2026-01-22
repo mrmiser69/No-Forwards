@@ -177,25 +177,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================
     if chat.type in ("group", "supergroup"):
 
+        # 🔐 STEP 1: Check bot member info
         try:
             me = await bot.get_chat_member(chat.id, bot.id)
-            is_admin = me.status in ("administrator", "creator")
         except:
+            return  # bot cannot access → silent
+
+        is_admin = me.status in ("administrator", "creator")
+
+        # 🔕 STEP 2: Bot cannot send messages → SILENT
+        if not getattr(me, "can_send_messages", True):
             return
 
         # ---------------------------
         # ✅ BOT IS ADMIN
         # ---------------------------
         if is_admin:
-            text = (
+            await msg.reply_text(
                 "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
                 "🔗 <b>Auto Link Delete</b>\n"
                 "🔇 <b>Spam Link Mute</b>\n\n"
-                "🤖 Bot က လက်ရှိ Group မှာ ကောင်းကောင်းအလုပ်လုပ်နေပါပြီး။"
-            )
-
-            await msg.reply_text(
-                text,
+                "🤖 Bot က လက်ရှိ Group မှာ ကောင်းကောင်းအလုပ်လုပ်နေပါပြီး။",
                 parse_mode="HTML"
             )
             return
@@ -203,24 +205,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ---------------------------
         # ❌ BOT IS NOT ADMIN
         # ---------------------------
-        text = (
+        await msg.reply_text(
             "⚠️ <b>Bot သည် Admin မဟုတ်သေးပါ</b>\n\n"
             "🤖 <b>Bot ကို အလုပ်လုပ်စေရန်</b>\n"
             "⭐️ <b>Admin Permission ပေးပါ</b>\n\n"
-            "Required: Delete messages"
-        )
-
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "⭐️ GIVE ADMIN PERMISSION",
-                url=f"https://t.me/{bot_username}?startgroup=true"
-            )
-        ]])
-
-        await msg.reply_text(
-            text,
+            "Required: Delete messages",
             parse_mode="HTML",
-            reply_markup=keyboard
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "⭐️ GIVE ADMIN PERMISSION",
+                    url=f"https://t.me/{bot_username}?startgroup=true"
+                )
+            ]])
         )
         return
  
