@@ -1208,12 +1208,14 @@ async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===============================
-# MAIN (FINAL FIXED)
+# MAIN (FINAL CORRECT VERSION)
 # ===============================
 def main():
+    global pool
+
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN missing")
-    
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # -------------------------------
@@ -1223,16 +1225,16 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("refresh", refresh))
     app.add_handler(CommandHandler("refresh_all", refresh_all))
-    
+
     # -------------------------------
-    # On My Chat Member
+    # Chat Member
     # -------------------------------
     app.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
-  
+
     # -------------------------------
-    # Auto link delete (GROUP + SUPERGROUP ONLY)
+    # Auto link delete
     # -------------------------------
     app.add_handler(
         MessageHandler(
@@ -1243,7 +1245,7 @@ def main():
     )
 
     # -------------------------------
-    # Broadcast (OWNER ONLY)
+    # Broadcast
     # -------------------------------
     app.add_handler(
         MessageHandler(
@@ -1258,19 +1260,17 @@ def main():
         broadcast_confirm_handler,
         pattern="broadcast_confirm"
     ))
-
     app.add_handler(CallbackQueryHandler(
         broadcast_target_handler,
         pattern="^bc_target_"
     ))
-
     app.add_handler(CallbackQueryHandler(
         broadcast_cancel_handler,
         pattern="broadcast_cancel"
     ))
 
     # -------------------------------
-    # Startup jobs (ORDER IS CRITICAL)
+    # STARTUP HOOK (CORRECT)
     # -------------------------------
     async def on_startup(app):
         global pool
@@ -1295,31 +1295,27 @@ def main():
                 kwargs={"prepare_threshold": None}
             )
             print("✅ DB pool created", flush=True)
-
         except Exception as e:
             print("❌ DB pool creation failed:", e, flush=True)
-            return   # ❗ bot ဆက်မ run စေချင်ရင်
+            raise
 
-        try:
-            await init_db()
-            print("✅ DB init done", flush=True)
-        except Exception as e:
-            print("⚠️ DB init failed:", e, flush=True)
+        await init_db()
+        print("✅ DB init done", flush=True)
 
-        try:
-            await refresh_admin_cache(app)
-            print("✅ Admin cache refreshed", flush=True)
-        except Exception as e:
-            print("⚠️ Refresh admin cache failed:", e, flush=True)
-
-        app.post_init = on_startup
+        await refresh_admin_cache(app)
+        print("✅ Admin cache refreshed", flush=True)
 
         print("🤖 Link Delete Bot running (PRODUCTION READY)", flush=True)
-    
-        try:
-            app.run_polling(close_loop=False)
-        finally:
+
+    # ✅ IMPORTANT: assign BEFORE run_polling
+    app.post_init = on_startup
+
+    try:
+        app.run_polling(close_loop=False)
+    finally:
+        if pool:
             pool.close()
 
-    if __name__ == "__main__":
-        main()
+
+if __name__ == "__main__":
+    main()
