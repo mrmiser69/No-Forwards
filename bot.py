@@ -183,17 +183,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return  # bot cannot access → silent
 
-        is_admin = me.status in ("administrator", "creator")
-
-        # 🔕 STEP 2: Bot cannot send messages → SILENT
-        if not getattr(me, "can_send_messages", True):
+        # 🔕 Bot စာပို့ခွင့် မရှိ → silent
+        if not me.can_send_messages:
             return
+
+        is_admin = me.status in ("administrator", "creator")
 
         # ---------------------------
         # ✅ BOT IS ADMIN
         # ---------------------------
         if is_admin:
-            await msg.reply_text(
+            await context.bot.send_message(
+                chat.id,
                 "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
                 "🔗 <b>Auto Link Delete</b>\n"
                 "🔇 <b>Spam Link Mute</b>\n\n"
@@ -205,7 +206,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ---------------------------
         # ❌ BOT IS NOT ADMIN
         # ---------------------------
-        await msg.reply_text(
+        await context.bot.send_message(
+            chat.id,
             "⚠️ <b>Bot သည် Admin မဟုတ်သေးပါ</b>\n\n"
             "🤖 <b>Bot ကို အလုပ်လုပ်စေရန်</b>\n"
             "⭐️ <b>Admin Permission ပေးပါ</b>\n\n"
