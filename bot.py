@@ -99,7 +99,7 @@ async def init_db():
     """)
 
 # ===============================
-# /start (PRIVATE)
+# /start
 # ===============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -177,23 +177,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================
     if chat.type in ("group", "supergroup"):
 
-        # 🔐 STEP 1: Check bot member info
+        # 🔐 Check bot status
         try:
             me = await bot.get_chat_member(chat.id, bot.id)
         except:
-            return  # bot cannot access → silent
+            return  # cannot access → silent
 
-        # 🔕 Bot စာပို့ခွင့် မရှိ → silent
+        # 🔕 No send permission → SILENT
         if not me.can_send_messages:
             return
-
-        is_admin = me.status in ("administrator", "creator")
 
         # ---------------------------
         # ✅ BOT IS ADMIN
         # ---------------------------
-        if is_admin:
-            await context.bot.send_message(
+        if me.status in ("administrator", "creator"):
+            await bot.send_message(
                 chat.id,
                 "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
                 "🔗 <b>Auto Link Delete</b>\n"
@@ -206,7 +204,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ---------------------------
         # ❌ BOT IS NOT ADMIN
         # ---------------------------
-        await context.bot.send_message(
+        await bot.send_message(
             chat.id,
             "⚠️ <b>Bot သည် Admin မဟုတ်သေးပါ</b>\n\n"
             "🤖 <b>Bot ကို အလုပ်လုပ်စေရန်</b>\n"
