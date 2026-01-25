@@ -43,6 +43,14 @@ REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
 BOT_START_TIME = int(time.time())
 
+LINK_SPAM_CACHE = {
+    # (chat_id, user_id): {
+    #   "count": int,
+    #   "last_time": int
+    # }
+}
+LINK_SPAM_CACHE_TTL = 7200  # 2 hours (recommend)
+
 # ===============================
 # CONFIG
 # ===============================
@@ -361,25 +369,24 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("❌ Delete failed:", e)
         return
 
-    user_mention = f'<a href="tg://user?id={user.id}">{user.first_name}</a>'
-
-    # ⚠️ Warn
-    try:
-        await context.bot.send_message(
-            chat_id,
-            f"⚠️ <b>{user_mention}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီး။\n"
-            "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
-            parse_mode="HTML"
-        )
-    except:
-        pass
-
-    # ===============================
-    # 🔢 STEP 5: COUNT + MUTE
-    # ===============================
+    # 🔢 STEP 5: COUNT + MUTE FIRST (IMPORTANT FIX)
     muted = await link_spam_control(chat_id, user_id, context)
 
-    if muted:
+    user_mention = f'<a href="tg://user?id={user.id}">{user.first_name}</a>'
+
+    # ⚠️ ONLY WARN IF NOT MUTED
+    if not muted:
+        try:
+            await context.bot.send_message(
+                chat_id,
+                f"⚠️ <b>{user_mention}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီး။\n"
+                "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
+                parse_mode="HTML"
+            )
+        except:
+            pass
+    else:
+        # 🔇 MUTE MESSAGE ONLY
         try:
             await context.bot.send_message(
                 chat_id,
@@ -391,91 +398,85 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-
 # ===============================
-# LINK COUNT + MUTE (DB SAFE - OPTIMIZED)
+# LINK COUNT + MUTE (RAM-FIRST ⭐ 90+)
 # ===============================
 async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     now = int(time.time())
+    key = (chat_id, user_id)
 
-    # ----------------------------------
-    # FETCH EXISTING RECORD (FAST)
-    # ----------------------------------
-    try:
-        rows = await asyncio.wait_for(
-            db_execute(
-                """
-                SELECT count, last_time
-                FROM link_spam
-                WHERE chat_id=%s AND user_id=%s
-                """,
-                (chat_id, user_id),
-                fetch=True
-            ),
-            timeout=2
-        )
-    except:
-        return False
+    # -------------------------------------------------
+    # 🔥 STEP 1: RAM-FIRST CHECK (NO DB, NO API)
+    # -------------------------------------------------
+    data = LINK_SPAM_CACHE.get(key)
 
-    # ----------------------------------
-    # EARLY EXIT (IMPORTANT FIX)
-    # user recently muted → skip DB work
-    # ----------------------------------
-    if rows:
-        last_time = rows[0]["last_time"]
-
-        # user is still inside mute window
-        if now - last_time < MUTE_SECONDS:
+    if data:
+        # ⛔ still muted window → nothing to do
+        if now - data["last_time"] < MUTE_SECONDS:
             return False
 
-    # ----------------------------------
-    # COUNT CALCULATION
-    # ----------------------------------
-    if rows:
-        prev = rows[0]
-        count = (
-            1
-            if now - prev["last_time"] > SPAM_RESET_SECONDS
-            else prev["count"] + 1
-        )
+        # 🔢 count logic
+        if now - data["last_time"] > SPAM_RESET_SECONDS:
+            data["count"] = 1
+        else:
+            data["count"] += 1
 
-        await db_execute(
-            """
-            UPDATE link_spam
-            SET count=%s, last_time=%s
-            WHERE chat_id=%s AND user_id=%s
-            """,
-            (count, now, chat_id, user_id)
-        )
+        data["last_time"] = now
     else:
-        count = 1
-        await db_execute(
-            """
-            INSERT INTO link_spam (chat_id, user_id, count, last_time)
-            VALUES (%s,%s,%s,%s)
-            """,
-            (chat_id, user_id, count, now)
-        )
+        # -------------------------------------------------
+        # 🐢 STEP 2: FALLBACK DB (FIRST TIME ONLY)
+        # -------------------------------------------------
+        try:
+            rows = await asyncio.wait_for(
+                db_execute(
+                    """
+                    SELECT count, last_time
+                    FROM link_spam
+                    WHERE chat_id=%s AND user_id=%s
+                    """,
+                    (chat_id, user_id),
+                    fetch=True
+                ),
+                timeout=2
+            )
+        except:
+            rows = None
 
-    # ----------------------------------
-    # LIMIT NOT REACHED
-    # ----------------------------------
-    if count < LINK_LIMIT:
+        if rows:
+            last_time = rows[0]["last_time"]
+
+            if now - last_time < MUTE_SECONDS:
+                return False
+
+            count = (
+                1
+                if now - last_time > SPAM_RESET_SECONDS
+                else rows[0]["count"] + 1
+            )
+        else:
+            count = 1
+
+        data = {
+            "count": count,
+            "last_time": now
+        }
+        LINK_SPAM_CACHE[key] = data
+
+    # -------------------------------------------------
+    # 🔢 STEP 3: LIMIT NOT REACHED
+    # -------------------------------------------------
+    if data["count"] < LINK_LIMIT:
         return False
 
-    # ----------------------------------
-    # SUPERGROUP ONLY
-    # ----------------------------------
-    try:
-        chat = await context.bot.get_chat(chat_id)
-        if chat.type != "supergroup":
-            return False
-    except:
+    # -------------------------------------------------
+    # 🔒 STEP 4: SUPERGROUP ONLY (NO API)
+    # -------------------------------------------------
+    if chat_id > 0:  # normal group → skip mute
         return False
 
-    # ----------------------------------
-    # BOT PERMISSION CHECK
-    # ----------------------------------
+    # -------------------------------------------------
+    # 👮 STEP 5: BOT PERMISSION CHECK
+    # -------------------------------------------------
     try:
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
         if not me.can_restrict_members:
@@ -483,9 +484,9 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
     except:
         return False
 
-    # ----------------------------------
-    # MUTE USER
-    # ----------------------------------
+    # -------------------------------------------------
+    # 🔇 STEP 6: MUTE USER
+    # -------------------------------------------------
     try:
         await context.bot.restrict_chat_member(
             chat_id,
@@ -496,15 +497,34 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
     except:
         return False
 
-    # ----------------------------------
-    # CLEANUP RECORD (OPTIONAL BUT GOOD)
-    # ----------------------------------
-    await db_execute(
-        "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
-        (chat_id, user_id)
+    # -------------------------------------------------
+    # 🧹 STEP 7: CLEANUP (RAM + DB ASYNC)
+    # -------------------------------------------------
+    LINK_SPAM_CACHE.pop(key, None)
+
+    context.application.create_task(
+        db_execute(
+            "DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s",
+            (chat_id, user_id)
+        )
     )
 
     return True
+
+# ===============================
+# RAM CACHE CLEANUP JOB
+# ===============================
+async def cleanup_link_spam_cache():
+    now = int(time.time())
+    removed = 0
+
+    for key, data in list(LINK_SPAM_CACHE.items()):
+        if now - data["last_time"] > LINK_SPAM_CACHE_TTL:
+            LINK_SPAM_CACHE.pop(key, None)
+            removed += 1
+
+    if removed:
+        print(f"🧹 RAM cache cleaned: {removed} entries")
 
 # ===============================
 # 📢 BROADCAST (OWNER ONLY)
@@ -1310,7 +1330,6 @@ def main():
     # -------------------------------
     async def on_startup(app):
         global pool
-
         print("🟡 Starting bot...", flush=True)
 
         await app.bot.delete_webhook(drop_pending_updates=True)
@@ -1341,9 +1360,18 @@ def main():
         await refresh_admin_cache(app)
         print("✅ Admin cache refreshed", flush=True)
 
+        # 🔄 schedule RAM cache cleanup (every 30 minutes) ✅ CORRECT PLACE
+        if app.job_queue:
+            app.job_queue.run_repeating(
+                cleanup_link_spam_cache,
+                interval=1800,   # 30 minutes
+                first=1800
+            )
+            print("🧹 RAM cache cleanup job scheduled", flush=True)
+
         print("🤖 Link Delete Bot running (PRODUCTION READY)", flush=True)
 
-    # ✅ IMPORTANT: assign BEFORE run_polling
+    # ✅ IMPORTANT
     app.post_init = on_startup
 
     try:
