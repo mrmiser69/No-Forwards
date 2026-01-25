@@ -512,9 +512,9 @@ async def link_spam_control(chat_id: int, user_id: int, context: ContextTypes.DE
     return True
 
 # ===============================
-# RAM CACHE CLEANUP JOB
+# RAM CACHE CLEANUP JOB (FIXED)
 # ===============================
-async def cleanup_link_spam_cache():
+async def cleanup_link_spam_cache(context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
     removed = 0
 
