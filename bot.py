@@ -1192,7 +1192,7 @@ async def refresh_admin_cache(app):
     verified = 0
     skipped = 0
 
-    now = int(time.time())
+    now = time.time_ns()
 
     for row in rows:
         gid = row["group_id"]
