@@ -13,7 +13,7 @@ from telegram import (
     InlineKeyboardButton,
     ChatPermissions,
 )
-from telegram.error import RetryAfter, Forbidden, BadRequest
+from telegram.error import RetryAfter, Forbidden, BadRequest, ChatMigrated
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -630,10 +630,35 @@ async def safe_send(func, *args, **kwargs):
     for _ in range(5):
         try:
             return await func(*args, **kwargs)
+
+        except ChatMigrated as e:
+            # args = (context, chat_id, data) ဆိုတဲ့ pattern ဖြစ်နေလို့
+            try:
+                context = args[0]
+                old_chat_id = args[1]
+                new_chat_id = e.new_chat_id
+
+                # DB update (groups table)
+                context.application.create_task(
+                    db_execute(
+                        "UPDATE groups SET group_id=%s WHERE group_id=%s",
+                        (new_chat_id, old_chat_id)
+                    )
+                )
+
+                # retry with new chat id
+                new_args = (args[0], new_chat_id, *args[2:])
+                args = new_args
+                continue
+            except Exception:
+                return None
+
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
+
         except (Forbidden, BadRequest):
             return None
+
     return None
 
 # ===============================
