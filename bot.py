@@ -133,6 +133,78 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================
     if chat.type == "private":
 
+        # ---------------------------
+        # ✅ Deep-link flows (no extra handlers needed)
+        # t.me/<bot>?start=donate
+        # t.me/<bot>?start=donate_bot
+        # t.me/<bot>?start=donate_dev
+        # t.me/<bot>?start=donate_ton
+        # ---------------------------
+        arg = (context.args[0] if getattr(context, "args", None) else "").strip().lower()
+
+        # ===============================
+        # 💖 DONATE MENU
+        # ===============================
+        if arg == "donate":
+            donate_text = (
+                "<b>💖 Support Us</b>\n\n"
+                "မင်းအတွက် အလုပ်ကောင်းကောင်းလုပ်နေတဲ့ Bot ကို Support ပေးနိုင်ပါတယ်။\n\n"
+                "👇 အောက်ကနေ ရွေးပါ"
+            )
+            donate_buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⭐️ Support Bot (5 Stars)", url=f"https://t.me/{bot_username}?start=donate_bot")
+                ],
+                [
+                    InlineKeyboardButton("💸 Support Developer", url=f"https://t.me/{bot_username}?start=donate_dev")
+                ],
+                [
+                    InlineKeyboardButton("⬅️ Back", url=f"https://t.me/{bot_username}")
+                ],
+            ])
+            await msg.reply_text(donate_text, parse_mode="HTML", reply_markup=donate_buttons)
+            return
+
+        # ===============================
+        # ⭐️ Support Bot (Telegram Stars)
+        # ===============================
+        if arg == "donate_bot":
+            # NOTE: Stars donate = Stars balance goes to "this bot" (bot owner can withdraw/claim via Telegram tools)
+            # Local import to avoid changing global imports
+            from telegram import LabeledPrice
+
+            try:
+                await context.bot.send_invoice(
+                    chat_id=chat.id,
+                    title="Support Bot",
+                    description="Donate 5 Telegram Stars ⭐️",
+                    payload=f"donate_bot_5_{user.id}",
+                    currency="XTR",  # Telegram Stars currency
+                    prices=[LabeledPrice("Support", 5)],  # 5 Stars
+                    provider_token="",  # Stars usually use empty provider_token
+                )
+            except Exception as e:
+                await msg.reply_text(f"❌ Donate မလုပ်နိုင်ပါ: {e}")
+            return
+
+        # ===============================
+        # 🟦 TON Donate details
+        # ===============================
+        if arg in ("donate_dev", "donate_ton"):
+            TON_ADDRESS = os.getenv("TON_ADDRESS", "PUT_YOUR_TON_ADDRESS_HERE")
+            ton_text = (
+                "<b>🟦 Support Developer (TON)</b>\n\n"
+                f"<b>TON Address:</b>\n<code>{escape(TON_ADDRESS)}</code>\n\n"
+                "Address ကို copy လုပ်ပြီး TON ပို့ပါ ✅"
+            )
+            ton_buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⬅️ Back", url=f"https://t.me/{bot_username}?start=donate"),
+                ],
+            ])
+            await msg.reply_text(ton_text, parse_mode="HTML", reply_markup=ton_buttons)
+            return
+
         # save user
         context.application.create_task(
             db_execute(
@@ -175,6 +247,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             ])
 
+        # ✅ Donate Us button
+        if bot_username:
+            buttons.append([
+                InlineKeyboardButton(
+                    "💖 DONATE US",
+                    url=f"https://t.me/{bot_username}?start=donate"
+                )
+            ])
+
         buttons.append([
             InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
             InlineKeyboardButton("📢 𝐂𝐡𝐚𝐧𝐧𝐞𝐥", url="https://t.me/MMTelegramBotss"),
@@ -187,7 +268,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
-    
+
     # ===============================
     # 👥 GROUP / SUPERGROUP (/start)
     # ===============================
