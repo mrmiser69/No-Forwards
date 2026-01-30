@@ -171,14 +171,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if bot_username:
             buttons.append([
                 InlineKeyboardButton(
-                    "➕ ADD ME TO YOUR GROUP",
+                    "➕ 𝗔𝗗𝗗 𝗠𝗘 𝗧𝗢 𝗬𝗢𝗨𝗥 𝗚𝗥𝗢𝗨𝗣",
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ])
 
         # ✅ Donate Us button (Callback)
         buttons.append([
-            InlineKeyboardButton("💖 DONATE US", callback_data="donate_menu")
+            InlineKeyboardButton("💖 DONATE US 💖", callback_data="donate_menu")
         ])
 
         buttons.append([
@@ -236,7 +236,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton(
-                    "⭐️ GIVE ADMIN PERMISSION",
+                    "⭐ 𝗚𝗜𝗩𝗘 𝗔𝗗𝗠𝗜𝗡 𝗣𝗘𝗥𝗠𝗜𝗦𝗦𝗜𝗢𝗡",
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ]])
@@ -266,13 +266,13 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 1) Donate Menu ---
     if data == "donate_menu":
         donate_text = (
-            "<b>💖 Support Us</b>\n\n"
+            "<b>💖 Support Us !</b>\n\n"
             "မင်းအတွက် အလုပ်ကောင်းကောင်းလုပ်နေတဲ့ Bot ကို Support ပေးနိုင်ပါတယ်။\n\n"
-            "👇 အောက်ကနေ ရွေးပါ"
+            "<b>👇 အောက်ကနေ ရွေးပါ</b>"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐️ Support Bot (5 Stars)", callback_data="donate_stars_5")],
-            [InlineKeyboardButton("🟦 Support Developer (TON)", callback_data="donate_ton")],
+            [InlineKeyboardButton("⭐️ 𝗦𝗨𝗣𝗣𝗢𝗥𝗧 𝗕𝗢𝗧 (5 Stars)", callback_data="donate_stars_5")],
+            [InlineKeyboardButton("🪙 𝗦𝗨𝗣𝗣𝗢𝗥𝗧 𝗗𝗘𝗩𝗘𝗟𝗢𝗣𝗘𝗥 (TON)", callback_data="donate_ton")],
             [InlineKeyboardButton("⬅️ Back", callback_data="donate_back_start")],
         ])
 
@@ -314,12 +314,12 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if bot_username:
             buttons.append([
                 InlineKeyboardButton(
-                    "➕ ADD ME TO YOUR GROUP",
+                    "➕ 𝗔𝗗𝗗 𝗠𝗘 𝗧𝗢 𝗬𝗢𝗨𝗥 𝗚𝗥𝗢𝗨𝗣",
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ])
 
-        buttons.append([InlineKeyboardButton("💖 DONATE US", callback_data="donate_menu")])
+        buttons.append([InlineKeyboardButton("💖 DONATE US 💖", callback_data="donate_menu")])
 
         buttons.append([
             InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
@@ -337,9 +337,10 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "donate_ton":
         TON_ADDRESS = os.getenv("TON_ADDRESS", "PUT_YOUR_TON_ADDRESS_HERE")
         ton_text = (
-            "<b>🟦 Support Developer (TON)</b>\n\n"
+            "<b>🪙 Support Developer (TON)</b>\n\n"
             f"<b>TON Address:</b>\n<code>{escape(TON_ADDRESS)}</code>\n\n"
-            "Address ကို copy လုပ်ပြီး TON ပို့ပါ ✅"
+            "✅ Address ကို copy လုပ်ပြီး TON coin ပေးပို့နိုင်ပါတယ်ဗျ။\n"
+            "💙 Thank You For Supporting !"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Back", callback_data="donate_menu")],
@@ -360,7 +361,10 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_invoice(
                 chat_id=query.message.chat.id,
                 title="Support Bot",
-                description="Donate 5 Telegram Stars ⭐️",
+                description=(
+                    "⭐️ Telegram Stars ၅ လုံးနဲ့ Bot ကို Support ပေးနိုင်ပါတယ်။\n\n"
+                    "မင်းရဲ့ အားပေးမှုက ဒီ Bot ကို ပိုကောင်းအောင် ဆက်လုပ်နိုင်ဖို့ အားအင်ဖြစ်စေပါတယ် 💙"
+                ),
                 payload=f"donate_bot_5_{user.id}",
                 currency="XTR",
                 prices=[LabeledPrice("Support", 5)],
@@ -697,8 +701,10 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = msg.text or msg.caption
-    if text and text.startswith("/broadcast"):
-        text = text.replace("/broadcast", "", 1).strip()
+    if not text or not text.startswith("/broadcast"):
+        return
+
+    text = text.replace("/broadcast", "", 1).strip()
 
     content = {
         "text": text,
@@ -922,47 +928,51 @@ async def send_content(context, chat_id, data):
 
     try:
         if data.get("photo"):
-            await context.bot.send_photo(
-                chat_id,
-                data["photo"],
-                caption=text,
+            return await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=data["photo"],
+                caption=text if text else None,
                 parse_mode="HTML"
             )
 
-        elif data.get("video"):
-            await context.bot.send_video(
-                chat_id,
-                data["video"],
-                caption=text,
+        if data.get("video"):
+            return await context.bot.send_video(
+                chat_id=chat_id,
+                video=data["video"],
+                caption=text if text else None,
                 parse_mode="HTML"
             )
 
-        elif data.get("audio"):
-            await context.bot.send_audio(
-                chat_id,
-                data["audio"],
-                caption=text,
+        if data.get("audio"):
+            return await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=data["audio"],
+                caption=text if text else None,
                 parse_mode="HTML"
             )
 
-        elif data.get("document"):
-            await context.bot.send_document(
-                chat_id,
-                data["document"],
-                caption=text,
+        if data.get("document"):
+            return await context.bot.send_document(
+                chat_id=chat_id,
+                document=data["document"],
+                caption=text if text else None,
                 parse_mode="HTML"
             )
 
-        else:
-            await context.bot.send_message(
-                chat_id,
-                text,
+        if text:
+            return await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
                 parse_mode="HTML"
             )
 
+    except Forbidden:
+        # bot kicked / blocked → silent
+        return
+    except BadRequest:
+        return
     except Exception:
-        # let caller (safe_send) + broadcast logic handle cleanup
-        raise
+        return
 
 # ===============================
 # Auto leave job (FIXED)
@@ -1138,7 +1148,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             me = await context.bot.get_me()
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
-                    "⭐️ GIVE ADMIN PERMISSION",
+                    "⭐ 𝗚𝗜𝗩𝗘 𝗔𝗗𝗠𝗜𝗡 𝗣𝗘𝗥𝗠𝗜𝗦𝗦𝗜𝗢𝗡",
                     url=f"https://t.me/{me.username}?startgroup=true"
                 )
             ]])
@@ -1218,7 +1228,7 @@ async def admin_reminder(context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                "⭐️ GIVE ADMIN PERMISSION",
+                "⭐ 𝗚𝗜𝗩𝗘 𝗔𝗗𝗠𝗜𝗡 𝗣𝗘𝗥𝗠𝗜𝗦𝗦𝗜𝗢𝗡",
                 url=f"https://t.me/{bot.username}?startgroup=true"
             )
         ]])
@@ -1508,8 +1518,7 @@ def main():
     app.add_handler(
         MessageHandler(
             filters.User(OWNER_ID)
-            & (filters.TEXT | filters.CAPTION)
-            & filters.Regex(r"^/broadcast"),
+            & (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL),
             broadcast
         )
     )
