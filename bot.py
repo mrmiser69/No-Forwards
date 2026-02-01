@@ -795,19 +795,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text_html = src_msg.parse_entities(as_html=True)
 
     else:
-        # normal mode: shift entities after removing command prefix
-        shift = m.end()
-        new_entities = []
-        for e in (src_entities or []):
-            if e.offset + e.length <= shift:
-                continue
-            if e.offset >= shift:
-                e2 = e.copy()
-                e2.offset -= shift
-                new_entities.append(e2)
-            else:
-                # overlaps prefix -> drop (safe)
-                continue
 
         text_html = src_msg.parse_entities(as_html=True)
 
