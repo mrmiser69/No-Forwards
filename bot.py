@@ -223,33 +223,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ✅ BOT IS ADMIN
         # ---------------------------
         if me.status in ("administrator", "creator"):
-            await bot.send_message(
-                chat.id,
-                "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
-                "🔗 <b>Auto Link Delete</b>\n"
-                "🔇 <b>Spam Link Mute</b>\n\n"
-                "🤖 Bot က လက်ရှိ Group မှာ ကောင်းကောင်းအလုပ်လုပ်နေပါပြီး။",
-                parse_mode="HTML"
-            )
-            return
+            try:
+                await bot.send_message(
+                    chat.id,
+                    "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
+                    "🔗 <b>Auto Link Delete</b>\n"
+                    "🔇 <b>Spam Link Mute</b>\n\n"
+                    "🤖 Bot က လက်ရှိ Group မှာ ကောင်းကောင်းအလုပ်လုပ်နေပါပြီး။",
+                    parse_mode="HTML"
+                )
+            except RetryAfter:
+                return
+            except Exception:
+                return
+
+            return  # ⭐ အရေးကြီး (အောက်က NOT ADMIN block ကို မဆက်ပို့အောင်)
 
         # ---------------------------
         # ❌ BOT IS NOT ADMIN
         # ---------------------------
-        await bot.send_message(
-            chat.id,
-            "⚠️ <b>Bot သည် Admin မဟုတ်သေးပါ</b>\n\n"
-            "🤖 <b>Bot ကို အလုပ်လုပ်စေရန်</b>\n"
-            "⭐️ <b>Admin Permission ပေးပါ</b>\n\n"
-            "Required: Delete messages",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    "⭐ 𝗚𝗜𝗩𝗘 𝗔𝗗𝗠𝗜𝗡 𝗣𝗘𝗥𝗠𝗜𝗦𝗦𝗜𝗢𝗡",
-                    url=f"https://t.me/{bot_username}?startgroup=true"
-                )
-            ]])
-        )
+        try:
+            await bot.send_message(
+                chat.id,
+                "⚠️ <b>Bot သည် Admin မဟုတ်သေးပါ</b>\n\n"
+                "🤖 <b>Bot ကို အလုပ်လုပ်စေရန်</b>\n"
+                "⭐️ <b>Admin Permission ပေးပါ</b>\n\n"
+                "Required: Delete messages",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "⭐ 𝗚𝗜𝗩𝗘 𝗔𝗗𝗠𝗜𝗡 𝗣𝗘𝗥𝗠𝗜𝗦𝗦𝗜𝗢𝗡",
+                        url=f"https://t.me/{bot_username}?startgroup=true"
+                    )
+                ]])
+            )
+        except RetryAfter:
+            return
+        except Exception:
+            return
+
         return
 
 # ===============================
@@ -1710,7 +1722,14 @@ def main():
             print("🧹 RAM cache cleanup job scheduled", flush=True)
 
         print("🤖 Link Delete Bot running (PRODUCTION READY)", flush=True)
+    
+    async def on_error(update, context):
+        if isinstance(context.error, RetryAfter):
+            return
+        print("ERROR:", context.error)
 
+    app.add_error_handler(on_error)
+    
     # ✅ IMPORTANT
     app.post_init = on_startup
 
