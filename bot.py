@@ -33,7 +33,7 @@ from psycopg_pool import ConnectionPool  # ✅ ONLY THIS (Supabase safe)
 # ===============================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-START_IMAGE = "https://i.postimg.cc/q7PtfZYj/Untitled-design-(16).png"
+START_IMAGE = "https://i.postimg.cc/fRxRYj9Y/photo_2026_02_10_01_15_39.jpg"
 
 DB_HOST = os.getenv("SUPABASE_HOST")
 DB_NAME = os.getenv("SUPABASE_DB")
