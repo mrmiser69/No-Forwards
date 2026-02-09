@@ -41,8 +41,8 @@ DB_USER = os.getenv("SUPABASE_USER")
 DB_PASS = os.getenv("SUPABASE_PASSWORD")
 DB_PORT = int(os.getenv("SUPABASE_PORT", "6543"))
 
-# Link + mute
-LINK_LIMIT = 3
+# Forward + mute
+FORWARD_LIMIT = 3
 MUTE_SECONDS = 600
 SPAM_RESET_SECONDS = 3600
 
@@ -58,8 +58,8 @@ REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
 BOT_START_TIME = int(time.time())
 
-LINK_SPAM_CACHE = {}
-LINK_SPAM_CACHE_TTL = 7200  # 2 hours
+FORWARD_SPAM_CACHE = {}
+FORWARD_SPAM_CACHE_TTL = 7200  # 2 hours
 
 LOG_RATE_CACHE = {}
 LOG_RATE_SECONDS = 60
@@ -115,7 +115,7 @@ async def init_db():
         )
     """)
     await db_execute("""
-        CREATE TABLE IF NOT EXISTS link_spam (
+        CREATE TABLE IF NOT EXISTS forward_spam (
             chat_id BIGINT,
             user_id BIGINT,
             count INT,
@@ -124,10 +124,10 @@ async def init_db():
         )
     """)
 
-async def upsert_link_spam(chat_id: int, user_id: int, count: int, last_time: int):
+async def upsert_forward_spam(chat_id: int, user_id: int, count: int, last_time: int):
     await safe_db_execute(
         """
-        INSERT INTO link_spam (chat_id, user_id, count, last_time)
+        INSERT INTO forward_spam (chat_id, user_id, count, last_time)
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (chat_id, user_id)
         DO UPDATE SET count = EXCLUDED.count, last_time = EXCLUDED.last_time
@@ -153,6 +153,22 @@ def rate_limited_log(key: str, message: str):
         LOG_RATE_CACHE[key] = now
         print(message)
 
+def is_forwarded_message(msg) -> bool:
+    """Return True if message is forwarded (supports new/old Telegram fields)."""
+    if not msg:
+        return False
+    # PTB v20+ / Telegram newer
+    if getattr(msg, "forward_origin", None) is not None:
+        return True
+    # older fields
+    if getattr(msg, "forward_date", None) is not None:
+        return True
+    if getattr(msg, "forward_from", None) is not None:
+        return True
+    if getattr(msg, "forward_from_chat", None) is not None:
+        return True
+    return False
+
 def clear_reminders(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     job_queue = context.job_queue
     if job_queue is None:
@@ -165,12 +181,12 @@ def clear_reminders(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         if name.startswith("auto_leave_") or data.get("type") == "admin_reminder":
             job.schedule_removal()
 
-async def cleanup_link_spam_cache(context: ContextTypes.DEFAULT_TYPE):
+async def cleanup_forward_spam_cache(context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
     removed = 0
-    for key, data in list(LINK_SPAM_CACHE.items()):
-        if now - data["last_time"] > LINK_SPAM_CACHE_TTL:
-            LINK_SPAM_CACHE.pop(key, None)
+    for key, data in list(FORWARD_SPAM_CACHE.items()):
+        if now - data["last_time"] > FORWARD_SPAM_CACHE_TTL:
+            FORWARD_SPAM_CACHE.pop(key, None)
             removed += 1
     if removed:
         print(f"🧹 RAM cache cleaned: {removed} entries")
@@ -245,11 +261,11 @@ async def ensure_bot_admin_live(chat_id: int, context: ContextTypes.DEFAULT_TYPE
         USER_ADMIN_CACHE[new_id] = USER_ADMIN_CACHE.pop(chat_id, set())
         REMINDER_MESSAGES[new_id] = REMINDER_MESSAGES.pop(chat_id, [])
 
-        # migrate LINK_SPAM_CACHE keys (chat_id, user_id)
-        for (cid, uid), v in list(LINK_SPAM_CACHE.items()):
+        # migrate FORWARD_SPAM_CACHE keys (chat_id, user_id)
+        for (cid, uid), v in list(FORWARD_SPAM_CACHE.items()):
             if cid == chat_id:
-                LINK_SPAM_CACHE[(new_id, uid)] = v
-                LINK_SPAM_CACHE.pop((cid, uid), None)
+                FORWARD_SPAM_CACHE[(new_id, uid)] = v
+                FORWARD_SPAM_CACHE.pop((cid, uid), None)
 
         # -------- DB migrate --------
         # ✅ IMPORTANT: UPSERT new row + remove old row (avoid stale rows)
@@ -270,10 +286,7 @@ async def ensure_bot_admin_live(chat_id: int, context: ContextTypes.DEFAULT_TYPE
             safe_db_execute("DELETE FROM groups WHERE group_id=%s", (chat_id,))
         )
         context.application.create_task(
-            safe_db_execute(
-                "DELETE FROM link_spam WHERE chat_id=%s",
-                (chat_id,)
-            )
+            safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (chat_id,))
         )
 
         # retry with new chat_id
@@ -379,12 +392,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"<b>────「 {bot_mention} 」────</b>\n\n"
             f"<b>ဟယ်လို {user_mention} ! 👋</b>\n\n"
-            "<b>ငါသည် Group များအတွက် Link ဖျက် Bot တစ်ခုဖြစ်တယ်။</b>\n"
+            "<b>ငါသည် Group များအတွက် Forward ဖျက် Bot တစ်ခုဖြစ်တယ်။</b>\n"
             "<b>ငါ၏လုပ်နိုင်စွမ်းကို ကောင်းကောင်းအသုံးချပါ။</b>\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📌 ငါ၏လုပ်နိုင်စွမ်း</b>\n\n"
-            "✅ Auto Link Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
-            "✅ Spam Link Mute ( Link 3 ခါ ပို့ရင် 10 မိနစ် Auto Mute ပေး။ )\n\n"
+            "✅ Auto Forward Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
+            "✅ Spam Forward Mute ( Forward 3 ခါ လုပ်ရင် 10 မိနစ် Auto Mute ပေး။ )\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📥 ငါ့ကိုအသုံးပြုရန်</b>\n\n"
             "➕ ငါ့ကို Group ထဲထည့်ပါ\n"
@@ -429,8 +442,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await bot.send_message(
                     chat.id,
                     "✅ Bot ကို Admin အဖြစ်ခန့်ထားပြီးသားပါ။\n\n"
-                    "🔗 <b>Auto Link Delete</b>\n"
-                    "🔇 <b>Spam Link Mute</b>\n\n"
+                    "🔗 <b>Auto Forward Delete</b>\n"
+                    "🚫 <b>Spam Forward Mute</b>\n\n"
                     "🤖 Bot က လက်ရှိ Group မှာ ကောင်းကောင်းအလုပ်လုပ်နေပါပြီး။",
                     parse_mode="HTML"
                 )
@@ -500,12 +513,12 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_text = (
             f"<b>────「 {bot_mention} 」────</b>\n\n"
             f"<b>ဟယ်လို {user_mention} ! 👋</b>\n\n"
-            "<b>ငါသည် Group များအတွက် Link ဖျက် Bot တစ်ခုဖြစ်တယ်။</b>\n"
+            "<b>ငါသည် Group များအတွက် Forward ဖျက် Bot တစ်ခုဖြစ်တယ်။</b>\n"
             "<b>ငါ၏လုပ်နိုင်စွမ်းကို ကောင်းကောင်းအသုံးချပါ။</b>\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📌 ငါ၏လုပ်နိုင်စွမ်း</b>\n\n"
-            "✅ Auto Link Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
-            "✅ Spam Link Mute ( Link 3 ခါ ပို့ရင် 10 မိနစ် Auto Mute ပေး။ )\n\n"
+            "✅ Auto Forward Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
+            "✅ Spam Forward Mute ( Forward 3 ခါ လုပ်ရင် 10 မိနစ် Auto Mute ပေး။ )\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📥 ငါ့ကိုအသုံးပြုရန်</b>\n\n"
             "➕ ငါ့ကို Group ထဲထည့်ပါ\n"
@@ -625,9 +638,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===============================
-# AUTO LINK DELETE
+# AUTO DELETE FORWARDS
 # ===============================
-async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def auto_delete_forwards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     msg = update.effective_message
     user = update.effective_user
@@ -641,21 +654,8 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = chat.id
     user_id = user.id
 
-    has_link = False
-    entities = []
-    if msg.entities:
-        entities.extend(msg.entities)
-    if msg.caption_entities:
-        entities.extend(msg.caption_entities)
-    for e in entities:
-        if e.type in ("url", "text_link"):
-            has_link = True
-            break
-
-    text = (msg.text or msg.caption or "").lower()
-    if "http://" in text or "https://" in text or "t.me/" in text:
-        has_link = True
-    if not has_link:
+    # ✅ NO FORWARD: only act on forwarded messages
+    if not is_forwarded_message(msg):
         return
 
     # ✅ BOT ADMIN CHECK (SOURCE OF TRUTH = Telegram API)
@@ -675,7 +675,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rate_limited_log(f"delete_fail_{chat_id}", f"❌ Delete failed in {chat_id}: {e}")
         return
 
-    muted = await link_spam_control(chat_id, chat.type, user_id, context)
+    muted = await forward_spam_control(chat_id, chat.type, user_id, context)
     name = escape(user.first_name or "User")
     user_mention = f'<a href="tg://user?id={user.id}">{name}</a>'
 
@@ -684,7 +684,7 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id,
                 f"⚠️ <b>{user_mention}</b> မင်းရဲ့စာကို ဖျက်လိုက်ပါပြီး။\n"
-                "အကြောင်းပြချက်: 🔗 Link ပို့လို့ မရပါဘူး။",
+                "အကြောင်းပြချက်: 🚫 Forward မလုပ်ရပါဘူး။",
                 parse_mode="HTML"
             )
         except RetryAfter:
@@ -696,23 +696,23 @@ async def auto_delete_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id,
                 f"🔇 <b>{user_mention}</b>\n"
-                f"🔗 Link {LINK_LIMIT} ကြိမ် ပို့လို့\n"
+                f"🚫 Forward {FORWARD_LIMIT} ကြိမ် လုပ်လို့\n"
                 f"⏰ 10 မိနစ် mute လုပ်လိုက်ပါပြီး",
                 parse_mode="HTML"
             )
         except:
             pass
 
-async def link_spam_control(chat_id: int, chat_type: str, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def forward_spam_control(chat_id: int, chat_type: str, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     now = int(time.time())
     key = (chat_id, user_id)
 
-    data = LINK_SPAM_CACHE.get(key)
+    data = FORWARD_SPAM_CACHE.get(key)
     if data:
         mute_until = data.get("mute_until", 0)
         if mute_until and now < mute_until:
             return True
-        # ✅ ALWAYS count every new link attempt
+        # ✅ ALWAYS count every new forward attempt
         last_time = int(data.get("last_time", 0))
         if now - last_time > SPAM_RESET_SECONDS:
             data["count"] = 1
@@ -725,7 +725,7 @@ async def link_spam_control(chat_id: int, chat_type: str, user_id: int, context:
                 safe_db_execute(
                     """
                     SELECT count, last_time
-                    FROM link_spam
+                    FROM forward_spam
                     WHERE chat_id=%s AND user_id=%s
                     """,
                     (chat_id, user_id),
@@ -738,17 +738,17 @@ async def link_spam_control(chat_id: int, chat_type: str, user_id: int, context:
 
         if rows:
             last_time = rows[0]["last_time"]
-            # ✅ ALWAYS count every new link attempt (no early return)
+            # ✅ ALWAYS count every new forward attempt (no early return)
             count = 1 if now - last_time > SPAM_RESET_SECONDS else int(rows[0]["count"]) + 1
         else:
             count = 1
 
         data = {"count": count, "last_time": now}
-        LINK_SPAM_CACHE[key] = data
+        FORWARD_SPAM_CACHE[key] = data
 
-    if data["count"] < LINK_LIMIT:
+    if data["count"] < FORWARD_LIMIT:
         context.application.create_task(
-            upsert_link_spam(chat_id, user_id, data["count"], data["last_time"])
+            upsert_forward_spam(chat_id, user_id, data["count"], data["last_time"])
         )
         return False
 
@@ -772,14 +772,14 @@ async def link_spam_control(chat_id: int, chat_type: str, user_id: int, context:
     except:
         return False
 
-    LINK_SPAM_CACHE[key] = {
-        "count": data.get("count", LINK_LIMIT),
+    FORWARD_SPAM_CACHE[key] = {
+        "count": data.get("count", FORWARD_LIMIT),
         "last_time": now,
         "mute_until": now + MUTE_SECONDS
     }
 
     context.application.create_task(
-        safe_db_execute("DELETE FROM link_spam WHERE chat_id=%s AND user_id=%s", (chat_id, user_id))
+        safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s AND user_id=%s", (chat_id, user_id))
     )
     return True
 
@@ -1117,7 +1117,7 @@ async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
         )
     )
     context.application.create_task(
-        safe_db_execute("DELETE FROM link_spam WHERE chat_id=%s", (chat_id,))
+        safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (chat_id,))
     )
 
     try:
@@ -1172,7 +1172,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat.id,
                 "✅ <b>Thank you!</b>\n\n"
                 "🤖 Bot ကို <b>Admin</b> အဖြစ် ခန့်ထားပြီးပါပြီး။\n"
-                "🔗 Auto Link Delete & Spam Link Mute စနစ် စတင်အလုပ်လုပ်နေပါပြီး.........!",
+                "🚫 Auto Forward Delete & Spam Forward Mute စနစ် စတင်အလုပ်လုပ်နေပါပြီး.........!",
                 parse_mode="HTML"
             )
         except:
@@ -1394,10 +1394,10 @@ async def refresh_admin_cache(app):
                 BOT_ADMIN_CACHE.add(new_id)
             USER_ADMIN_CACHE[new_id] = USER_ADMIN_CACHE.pop(gid, set())
             REMINDER_MESSAGES[new_id] = REMINDER_MESSAGES.pop(gid, [])
-            for (cid, uid), v in list(LINK_SPAM_CACHE.items()):
+            for (cid, uid), v in list(FORWARD_SPAM_CACHE.items()):
                 if cid == gid:
-                    LINK_SPAM_CACHE[(new_id, uid)] = v
-                    LINK_SPAM_CACHE.pop((cid, uid), None)
+                    FORWARD_SPAM_CACHE[(new_id, uid)] = v
+                    FORWARD_SPAM_CACHE.pop((cid, uid), None)
             # ✅ retry admin check using new_id (same loop iteration)
             try:
                 me2 = await app.bot.get_chat_member(new_id, app.bot.id)
@@ -1505,9 +1505,9 @@ def main():
     # Chat member
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
-    # Auto link delete
+    # Auto delete forwards
     app.add_handler(
-        MessageHandler(filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP, auto_delete_links),
+        MessageHandler(filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP, auto_delete_forwards),
         group=0
     )
 
@@ -1563,13 +1563,13 @@ def main():
         # 🔄 schedule RAM cache cleanup (every 30 minutes) ✅ CORRECT PLACE
         if app.job_queue:
             app.job_queue.run_repeating(
-                cleanup_link_spam_cache,
+                cleanup_forward_spam_cache,
                 interval=1800,   # 30 minutes
                 first=1800
             )
             print("🧹 RAM cache cleanup job scheduled", flush=True)
 
-        print("🤖 Link Delete Bot running (PRODUCTION READY)", flush=True)
+        print("🤖 No-Forward Bot running (PRODUCTION READY)", flush=True)
     
     async def on_error(update, context):
         if isinstance(context.error, RetryAfter):
