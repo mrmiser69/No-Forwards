@@ -67,6 +67,9 @@ LOG_RATE_SECONDS = 60
 ADMIN_VERIFY_CACHE = {}
 ADMIN_VERIFY_SECONDS = 60
 
+RECENT_WARN_CACHE = {}
+RECENT_WARN_SECONDS = 5
+
 # ===============================
 # DB POOL + DB EXEC
 # ===============================
@@ -676,6 +679,14 @@ async def auto_delete_forwards(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     muted = await forward_spam_control(chat_id, chat.type, user_id, context)
+    
+    now = int(time.time())
+    wkey = (chat_id, user_id)
+    last_warn = RECENT_WARN_CACHE.get(wkey, 0)
+    if now - last_warn < RECENT_WARN_SECONDS:
+        return
+    RECENT_WARN_CACHE[wkey] = now
+    
     name = escape(user.first_name or "User")
     user_mention = f'<a href="tg://user?id={user.id}">{name}</a>'
 
