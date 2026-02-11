@@ -1213,7 +1213,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🤖 Bot ကို <b>Admin</b> အဖြစ် ခန့်ထားပြီးပါပြီး။\n"
                 "🚫 Auto Forward Delete\n"
                 "🚫 Spam Forward Mute\n"
-                "🏃‍♂️‍➡️ စတင်အလုပ်လုပ်နေပါပြီး",
+                "🏃‍♂️‍➡️ စတင်အလုပ်လုပ်နေပါပြီး........!",
                 parse_mode="HTML"
             )
         except:
