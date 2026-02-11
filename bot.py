@@ -70,6 +70,13 @@ ADMIN_VERIFY_SECONDS = 60
 RECENT_WARN_CACHE = {}
 RECENT_WARN_SECONDS = 5
 
+ADMIN_LIST_CACHE: dict[int, set[int]] = {}
+ADMIN_LIST_CACHE_TS: dict[int, int] = {}
+ADMIN_LIST_TTL = 60  # seconds
+
+BOT_RESTRICT_CACHE: dict[int, tuple[bool, int]] = {}  # chat_id -> (can_restrict, ts)
+BOT_RESTRICT_TTL = 300  # 5 minutes
+
 # ===============================
 # DB POOL + DB EXEC
 # ===============================
@@ -350,17 +357,26 @@ async def ensure_bot_admin_live(chat_id: int, context: ContextTypes.DEFAULT_TYPE
     return False
 
 async def is_user_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    admins = USER_ADMIN_CACHE.setdefault(chat_id, set())
-    if user_id in admins:
+    # Fast path: cached admin list
+    admin_set = await get_admin_set(chat_id, context)
+    if user_id in admin_set:
         return True
+    return False
+
+async def get_admin_set(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> set[int]:
+    now = int(time.time())
+    last = ADMIN_LIST_CACHE_TS.get(chat_id, 0)
+    if now - last < ADMIN_LIST_TTL and chat_id in ADMIN_LIST_CACHE:
+        return ADMIN_LIST_CACHE[chat_id]
     try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status in ("administrator", "creator"):
-            admins.add(user_id)
-            return True
-        return False
-    except:
-        return False
+        admins = await context.bot.get_chat_administrators(chat_id)
+        s = {a.user.id for a in admins}
+        ADMIN_LIST_CACHE[chat_id] = s
+        ADMIN_LIST_CACHE_TS[chat_id] = now
+        return s
+    except Exception:
+        # fallback: old cache if exists
+        return ADMIN_LIST_CACHE.get(chat_id, set())
 
 # ===============================
 # /start + DONATE + PAYMENTS
@@ -415,7 +431,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ])
-        buttons.append([InlineKeyboardButton("💖 DONATE US 💖", callback_data="donate_menu")])
+        buttons.append([InlineKeyboardButton("🤍 DONATE US 🤍", callback_data="donate_menu")])
         buttons.append([
             InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
             InlineKeyboardButton("📢 𝐂𝐡𝐚𝐧𝐧𝐞𝐥", url="https://t.me/MMTelegramBotss"),
@@ -493,7 +509,7 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "donate_menu":
         donate_text = (
-            "<b>💖 Support Us !</b>\n\n"
+            "<b>🤍 Support Us !</b>\n\n"
             "မင်းအတွက် အလုပ်ကောင်းကောင်းလုပ်နေတဲ့ Bot ကို Support ပေးနိုင်ပါတယ်။\n\n"
             "<b>👇 အောက်ကနေ ရွေးပါ</b>"
         )
@@ -535,7 +551,7 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ])
-        buttons.append([InlineKeyboardButton("💖 DONATE US 💖", callback_data="donate_menu")])
+        buttons.append([InlineKeyboardButton("🤍 DONATE US 🤍", callback_data="donate_menu")])
         buttons.append([
             InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
             InlineKeyboardButton("📢 𝐂𝐡𝐚𝐧𝐧𝐞𝐥", url="https://t.me/MMTelegramBotss"),
@@ -766,12 +782,21 @@ async def forward_spam_control(chat_id: int, chat_type: str, user_id: int, conte
     if chat_type != "supergroup":
         return False
 
-    try:
-        me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if not getattr(me, "can_restrict_members", False):
+    # cached permission check
+    now2 = int(time.time())
+    cached = BOT_RESTRICT_CACHE.get(chat_id)
+    if cached and (now2 - cached[1] < BOT_RESTRICT_TTL):
+        if not cached[0]:
             return False
-    except:
-        return False
+    else:
+        try:
+            me = await context.bot.get_chat_member(chat_id, context.bot.id)
+            can_restrict = bool(getattr(me, "can_restrict_members", False))
+            BOT_RESTRICT_CACHE[chat_id] = (can_restrict, now2)
+            if not can_restrict:
+                return False
+        except Exception:
+            return False
 
     try:
         await context.bot.restrict_chat_member(
@@ -1144,6 +1169,9 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     USER_ADMIN_CACHE.pop(chat.id, None)
+    ADMIN_LIST_CACHE.pop(chat.id, None)
+    ADMIN_LIST_CACHE_TS.pop(chat.id, None)
+    
     old = update.my_chat_member.old_chat_member
     new = update.my_chat_member.new_chat_member
     if not old or not new:
@@ -1183,7 +1211,9 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat.id,
                 "✅ <b>Thank you!</b>\n\n"
                 "🤖 Bot ကို <b>Admin</b> အဖြစ် ခန့်ထားပြီးပါပြီး။\n"
-                "🚫 Auto Forward Delete & Spam Forward Mute စနစ် စတင်အလုပ်လုပ်နေပါပြီး.........!",
+                "🚫 Auto Forward Delete\n"
+                "🚫 Spam Forward Mute\n"
+                "🏃‍♂️‍➡️ စတင်အလုပ်လုပ်နေပါပြီး",
                 parse_mode="HTML"
             )
         except:
@@ -1307,6 +1337,8 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     BOT_ADMIN_CACHE.discard(chat_id)
     USER_ADMIN_CACHE.pop(chat_id, None)
+    ADMIN_LIST_CACHE.pop(chat_id, None)
+    ADMIN_LIST_CACHE_TS.pop(chat_id, None)
 
     try:
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
@@ -1560,16 +1592,18 @@ def main():
             )
             print("✅ DB pool created", flush=True)
         except Exception as e:
-            print("❌ DB pool creation failed:", e, flush=True)
-            raise
+            print("❌ DB pool creation failed (BOT WILL CONTINUE WITHOUT DB):", e, flush=True)
+            pool = None
 
-        await init_db()
-        print("✅ DB init done", flush=True)
-
-        now = await refresh_admin_cache(app)
-        print("✅ Admin cache refreshed", flush=True)
-        
-        await purge_non_admin_groups_verified(now)
+        # Only do DB-dependent startup if DB is available
+        if pool is not None:
+            await init_db()
+            print("✅ DB init done", flush=True)
+            now = await refresh_admin_cache(app)
+            print("✅ Admin cache refreshed", flush=True)
+            await purge_non_admin_groups_verified(now)
+        else:
+             print("⚠️ DB unavailable: skipping init_db/refresh_admin_cache/purge", flush=True)
         
         # 🔄 schedule RAM cache cleanup (every 30 minutes) ✅ CORRECT PLACE
         if app.job_queue:
