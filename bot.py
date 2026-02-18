@@ -134,6 +134,10 @@ async def init_db():
         )
     """)
 
+    # ✅ NEW: broadcast failure tracking (only used for NON-admin groups cleanup)
+    await db_execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS fail_count INT DEFAULT 0")
+    await db_execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS last_fail_at BIGINT")
+
 async def upsert_forward_spam(chat_id: int, user_id: int, count: int, last_time: int):
     await safe_db_execute(
         """
@@ -346,14 +350,6 @@ async def ensure_bot_admin_live(chat_id: int, context: ContextTypes.DEFAULT_TYPE
             (chat_id, now)
         )
     )
-
-    if context.job_queue:
-        context.job_queue.run_once(
-            leave_if_not_admin,
-            when=60,
-            data={"chat_id": chat_id},
-            name=f"auto_leave_{chat_id}"
-        )
     return False
 
 async def is_user_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -940,6 +936,9 @@ async def safe_send(func, *args, **kwargs):
                 ctx.application.create_task(
                     safe_db_execute("DELETE FROM groups WHERE group_id=%s", (old_chat_id,))
                 )
+                ctx.application.create_task(
+                    safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (old_chat_id,))
+                )
                 new_args = (args[0], new_chat_id, *args[2:])
                 args = new_args
                 continue
@@ -975,31 +974,62 @@ async def broadcast_target_handler(update: Update, context: ContextTypes.DEFAULT
         rows = await safe_db_execute("SELECT COUNT(*) AS c FROM users", fetch=True)
         total += int(rows[0]["c"]) if rows else 0
     if target_type in ("bc_target_groups", "bc_target_all"):
-        rows = await safe_db_execute(
-            "SELECT COUNT(*) AS c FROM groups WHERE is_admin_cached = TRUE",
-            fetch=True
-        )
+        # ✅ NEW: include BOTH admin + non-admin groups
+        rows = await safe_db_execute("SELECT COUNT(*) AS c FROM groups", fetch=True)
         total += int(rows[0]["c"]) if rows else 0
 
-    async def send_batch(ids):
+    async def record_group_broadcast_result(group_id: int, ok: bool):
+        """
+        - Admin group: never delete.
+        - Non-admin group: fail_count >= 10 => auto delete from DB.
+        NOTE: single SQL to avoid race.
+        """
+        if ok:
+            await safe_db_execute(
+                "UPDATE groups SET fail_count=0 WHERE group_id=%s AND is_admin_cached=FALSE",
+                (group_id,)
+            )
+            return
+
+        now_ts = int(time.time())
+        await safe_db_execute(
+            """
+            WITH bumped AS (
+              UPDATE groups
+              SET fail_count = COALESCE(fail_count,0) + 1,
+                  last_fail_at = %s
+              WHERE group_id=%s AND is_admin_cached=FALSE
+              RETURNING fail_count
+            )
+            DELETE FROM groups
+            WHERE group_id=%s
+              AND is_admin_cached=FALSE
+              AND COALESCE(fail_count,0) >= 10
+            """,
+            (now_ts, group_id, group_id)
+        )
+
+    async def send_batch(ids, *, is_group: bool):
         nonlocal sent, attempted
         for cid in ids:
             res = await safe_send(send_content, context, cid, data)
             attempted += 1
             if res:
                 sent += 1
+            if is_group:
+                await record_group_broadcast_result(cid, bool(res))
             if attempted % 50 == 0 or attempted == total:
                 await update_progress(progress_msg, attempted, total)
 
     if target_type in ("bc_target_users", "bc_target_all"):
         async for rows in iter_db_ids("SELECT user_id FROM users ORDER BY user_id"):
-            await send_batch([r["user_id"] for r in rows])
+            await send_batch([r["user_id"] for r in rows], is_group=False)
 
     if target_type in ("bc_target_groups", "bc_target_all"):
         async for rows in iter_db_ids(
-            "SELECT group_id FROM groups WHERE is_admin_cached = TRUE ORDER BY group_id"
+            "SELECT group_id FROM groups ORDER BY group_id"
         ):
-            await send_batch([r["group_id"] for r in rows])
+            await send_batch([r["group_id"] for r in rows], is_group=True)
 
     elapsed = int(time.time() - start_time)
     await progress_msg.edit_text(
@@ -1155,11 +1185,7 @@ async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
     context.application.create_task(
         safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (chat_id,))
     )
-
-    try:
-        await context.bot.leave_chat(chat_id)
-    except Exception as e:
-        print(f"⚠️ Leave chat failed ({chat_id}):", e)
+    return
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.my_chat_member:
@@ -1223,18 +1249,47 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (old.user.id == bot_id and old.status in ("administrator", "creator") and new.status in ("member", "left", "kicked")):
         BOT_ADMIN_CACHE.discard(chat.id)
         clear_reminders(context, chat.id)
-        if context.job_queue:
-            context.job_queue.run_once(
-                leave_if_not_admin,
-                when=60,
-                data={"chat_id": chat.id},
-                name=f"auto_leave_{chat.id}"
+        # ✅ NEW: if bot is still in group as member (demoted), mark DB as non-admin
+        if new.status == "member":
+            context.application.create_task(
+                safe_db_execute(
+                    """
+                    UPDATE groups
+                    SET is_admin_cached = FALSE,
+                        last_checked_at = %s
+                    WHERE group_id = %s
+                    """,
+                    (int(time.time()), chat.id)
+                )
+            )
+
+        # ✅ NEW: if bot is removed from group, delete it from DB
+        if new.status in ("left", "kicked"):
+            context.application.create_task(
+                safe_db_execute("DELETE FROM groups WHERE group_id=%s", (chat.id,))
+            )
+            context.application.create_task(
+                safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (chat.id,))
             )
         return
-
+ 
     if (new.user.id == bot_id and new.status == "member" and old.status in ("left", "kicked")):
         BOT_ADMIN_CACHE.discard(chat.id)
         clear_reminders(context, chat.id)
+        # ✅ NEW: store NON-admin group into DB (so broadcast can include it)
+        context.application.create_task(
+            safe_db_execute(
+                """
+                INSERT INTO groups (group_id, is_admin_cached, last_checked_at)
+                VALUES (%s, FALSE, %s)
+                ON CONFLICT (group_id)
+                DO UPDATE SET
+                  is_admin_cached = FALSE,
+                  last_checked_at = EXCLUDED.last_checked_at
+                """,
+                (chat.id, int(time.time()))
+            )
+        )
         try:
             me = await context.bot.get_me()
             keyboard = InlineKeyboardMarkup([[
@@ -1259,12 +1314,6 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         when=300 * i,
                         data={"chat_id": chat.id, "count": i, "total": 5, "type": "admin_reminder"}
                     )
-                context.job_queue.run_once(
-                    leave_if_not_admin,
-                    when=1510,
-                    data={"chat_id": chat.id},
-                    name=f"auto_leave_{chat.id}"
-                )
         except:
             pass
 
@@ -1479,15 +1528,9 @@ async def refresh_admin_cache(app):
     return now
 
 async def purge_non_admin_groups_verified(now: int):
-    await safe_db_execute(
-        """
-        DELETE FROM groups
-        WHERE is_admin_cached = FALSE
-          AND last_checked_at = %s
-        """,
-        (now,)
-    )
-    print("🧹 Startup purge: verified non-admin groups removed", flush=True)
+    # ✅ NEW: keep non-admin groups (do not purge)
+    print("ℹ️ Startup purge skipped: keeping non-admin groups in DB", flush=True)
+    return
 
 async def refresh_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or update.effective_user.id != OWNER_ID:
@@ -1603,7 +1646,7 @@ def main():
             print("✅ Admin cache refreshed", flush=True)
             await purge_non_admin_groups_verified(now)
         else:
-             print("⚠️ DB unavailable: skipping init_db/refresh_admin_cache/purge", flush=True)
+            print("⚠️ DB unavailable: skipping init_db/refresh_admin_cache/purge", flush=True)
         
         # 🔄 schedule RAM cache cleanup (every 30 minutes) ✅ CORRECT PLACE
         if app.job_queue:
