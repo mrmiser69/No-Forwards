@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import re
 from html import escape
+from typing import Optional
 
 from telegram import (
     Update,
@@ -56,6 +57,8 @@ BOT_ADMIN_CACHE: set[int] = set()
 USER_ADMIN_CACHE: dict[int, set[int]] = {}
 REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
+PENDING_TARGET = {}
+PENDING_BUTTON_WAIT = {}
 BOT_START_TIME = int(time.time())
 
 FORWARD_SPAM_CACHE = {}
@@ -81,6 +84,7 @@ BOT_RESTRICT_TTL = 300  # 5 minutes
 # DB POOL + DB EXEC
 # ===============================
 pool = None
+DB_READY = False
 
 async def db_execute(query, params=None, fetch=False):
     loop = asyncio.get_running_loop()
@@ -92,21 +96,24 @@ async def db_execute(query, params=None, fetch=False):
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 if fetch:
-                    cols = [d.name for d in cur.description]
-                    return [dict(zip(cols, r)) for r in cur.fetchall()]
+                    cols = [d.name for d in (cur.description or [])]
+                    rows = cur.fetchall()
+                    conn.commit()
+                    return [dict(zip(cols, r)) for r in rows] if cols else rows
                 conn.commit()
 
     return await loop.run_in_executor(None, _run)
 
 # ✅ prevent "Task exception was never retrieved" when DB is down
 async def safe_db_execute(query, params=None, fetch=False):
+    if pool is None or not DB_READY:
+        return None
     try:
         return await db_execute(query, params=params, fetch=fetch)
     except Exception as e:
         # keep bot running even if DB fails
         rate_limited_log("db_error", f"❌ DB ERROR: {e}")
         return None
-
 
 # ===============================
 # DB INIT / DB HELPERS
@@ -221,11 +228,11 @@ async def iter_db_ids(query, batch_size=500):
         yield rows
         offset += batch_size
 
-async def update_progress(msg, sent, total):
+async def update_progress(msg, done, total):
     if total <= 0:
         percent = 100
     else:
-        percent = int((sent / total) * 100)
+        percent = int((done / total) * 100)
     bar_blocks = min(10, percent // 10)
     bar = "█" * bar_blocks + "░" * (10 - bar_blocks)
     try:
@@ -245,7 +252,7 @@ async def is_bot_admin(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool
         return True
     try:
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if me.status in ("administrator", "creator"):
+        if me.status in ("administrator", "creator") and getattr(me, "can_delete_messages", False):
             BOT_ADMIN_CACHE.add(chat_id)
             return True
         return False
@@ -275,6 +282,12 @@ async def ensure_bot_admin_live(chat_id: int, context: ContextTypes.DEFAULT_TYPE
         USER_ADMIN_CACHE[new_id] = USER_ADMIN_CACHE.pop(chat_id, set())
         REMINDER_MESSAGES[new_id] = REMINDER_MESSAGES.pop(chat_id, [])
 
+        # ✅ migrate admin-list caches (avoid stale admin checks)
+        if chat_id in ADMIN_LIST_CACHE:
+            ADMIN_LIST_CACHE[new_id] = ADMIN_LIST_CACHE.pop(chat_id)
+        if chat_id in ADMIN_LIST_CACHE_TS:
+            ADMIN_LIST_CACHE_TS[new_id] = ADMIN_LIST_CACHE_TS.pop(chat_id)
+        
         # migrate FORWARD_SPAM_CACHE keys (chat_id, user_id)
         for (cid, uid), v in list(FORWARD_SPAM_CACHE.items()):
             if cid == chat_id:
@@ -311,6 +324,8 @@ async def ensure_bot_admin_live(chat_id: int, context: ContextTypes.DEFAULT_TYPE
         BOT_ADMIN_CACHE.discard(chat_id)
         USER_ADMIN_CACHE.pop(chat_id, None)
         REMINDER_MESSAGES.pop(chat_id, None)
+        ADMIN_LIST_CACHE.pop(chat_id, None)
+        ADMIN_LIST_CACHE_TS.pop(chat_id, None)
         return False
 
     is_admin = me.status in ("administrator", "creator")
@@ -774,6 +789,11 @@ async def forward_spam_control(chat_id: int, chat_type: str, user_id: int, conte
             upsert_forward_spam(chat_id, user_id, data["count"], data["last_time"])
         )
         return False
+    
+    # count >= limit ဖြစ်သွားပြီး mute မလုပ်နိုင်တဲ့ case တွေမှာလည်း DB ကို update ထားပါ
+    context.application.create_task(
+        upsert_forward_spam(chat_id, user_id, data["count"], data["last_time"])
+    )
 
     if chat_type != "supergroup":
         return False
@@ -904,16 +924,278 @@ async def broadcast_confirm_handler(update: Update, context: ContextTypes.DEFAUL
         reply_markup=keyboard
     )
 
+async def broadcast_target_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if OWNER_ID not in PENDING_BROADCAST:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    target_type = query.data
+    PENDING_TARGET[OWNER_ID] = target_type
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Post Now", callback_data="bc_post_now")],
+        [InlineKeyboardButton("➕ Auto Add Button", callback_data="bc_btn_auto")],
+        [InlineKeyboardButton("🔗 Manual Button URL", callback_data="bc_btn_manual")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="broadcast_cancel")]
+    ])
+    await query.edit_message_text(
+        "📢 <b>Post Option ကိုရွေးပါ</b>",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+async def broadcast_post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    data = PENDING_BROADCAST.pop(OWNER_ID, None)
+    target_type = PENDING_TARGET.pop(OWNER_ID, None)
+    PENDING_BUTTON_WAIT.pop(OWNER_ID, None)
+
+    if not data or not target_type:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    progress_msg = await query.edit_message_text(
+        "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
+        parse_mode="HTML"
+    )
+    await run_broadcast(context, data, target_type, progress_msg, button_url=None)
+
+async def broadcast_auto_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if OWNER_ID not in PENDING_BROADCAST or OWNER_ID not in PENDING_TARGET:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    bot_username = context.bot.username or ""
+    if not bot_username:
+        await query.edit_message_text("❌ Bot username မရှိလို့ Auto button link မလုပ်နိုင်ပါ")
+        return
+
+    url = f"https://t.me/{bot_username}?startgroup=true"
+
+    data = PENDING_BROADCAST.pop(OWNER_ID, None)
+    target_type = PENDING_TARGET.pop(OWNER_ID, None)
+    PENDING_BUTTON_WAIT.pop(OWNER_ID, None)
+
+    if not data or not target_type:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    progress_msg = await query.edit_message_text(
+        "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
+        parse_mode="HTML"
+    )
+    await run_broadcast(context, data, target_type, progress_msg, button_url=url)
+
+async def broadcast_manual_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if OWNER_ID not in PENDING_BROADCAST or OWNER_ID not in PENDING_TARGET:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    PENDING_BUTTON_WAIT[OWNER_ID] = True
+    await query.edit_message_text(
+        "🔗 Button URL ကို ပို့ပါ\n\nExample:\nhttps://t.me/YourBot",
+        parse_mode="HTML"
+    )
+
+async def broadcast_button_url_receiver(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    msg = update.effective_message
+    if not user or user.id != OWNER_ID or not msg:
+        return
+    if OWNER_ID not in PENDING_BUTTON_WAIT:
+        return
+
+    url = (msg.text or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await msg.reply_text("❌ Invalid URL (http/https) ပဲထည့်ပါ")
+        return
+
+    PENDING_BUTTON_WAIT.pop(OWNER_ID, None)
+    data = PENDING_BROADCAST.pop(OWNER_ID, None)
+    target_type = PENDING_TARGET.pop(OWNER_ID, None)
+
+    if not data or not target_type:
+        await msg.reply_text("❌ Broadcast data မရှိပါ")
+        return
+
+    progress_msg = await msg.reply_text(
+        "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
+        parse_mode="HTML"
+    )
+    await run_broadcast(context, data, target_type, progress_msg, button_url=url)
+
+async def run_broadcast(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict,
+    target_type: str,
+    progress_msg,
+    button_url: Optional[str] = None
+):
+    # ✅ DB down guard (avoid "Completed 0/0" confusion)
+    if pool is None or not DB_READY:
+        try:
+            await progress_msg.edit_text(
+                "❌ <b>Broadcast မလုပ်နိုင်ပါ</b>\n\n"
+                "⚠️ <b>DB unavailable</b> (Bot running without DB)",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
+    sent = 0
+    attempted = 0
+    start_time = time.time()
+    total = 0
+
+    if target_type in ("bc_target_users", "bc_target_all"):
+        rows = await safe_db_execute("SELECT COUNT(*) AS c FROM users", fetch=True)
+        total += int(rows[0]["c"]) if rows else 0
+    if target_type in ("bc_target_groups", "bc_target_all"):
+        rows = await safe_db_execute("SELECT COUNT(*) AS c FROM groups", fetch=True)
+        total += int(rows[0]["c"]) if rows else 0
+
+    async def record_broadcast_result(chat_id: int, success: bool):
+        rows = await safe_db_execute(
+            "SELECT is_admin_cached, fail_count FROM groups WHERE group_id=%s",
+            (chat_id,),
+            fetch=True
+        )
+        now_ts = int(time.time())
+
+        if not rows:
+            if success:
+                is_admin = (chat_id in BOT_ADMIN_CACHE)
+                await safe_db_execute(
+                    """
+                    INSERT INTO groups (group_id, is_admin_cached, last_checked_at, fail_count, last_fail_at)
+                    VALUES (%s, %s, %s, 0, NULL)
+                    ON CONFLICT (group_id)
+                    DO UPDATE SET last_checked_at = EXCLUDED.last_checked_at
+                    """,
+                    (chat_id, is_admin, now_ts)
+                )
+                return
+            await safe_db_execute(
+                """
+                INSERT INTO groups (group_id, is_admin_cached, last_checked_at, fail_count, last_fail_at)
+                VALUES (%s, FALSE, %s, 1, %s)
+                ON CONFLICT (group_id)
+                DO UPDATE SET
+                  last_checked_at = EXCLUDED.last_checked_at,
+                  fail_count = COALESCE(groups.fail_count, 0) + 1,
+                  last_fail_at = EXCLUDED.last_fail_at
+                """,
+                (chat_id, now_ts, now_ts)
+            )
+            return
+
+        is_admin = bool(rows[0].get("is_admin_cached"))
+        fails = int(rows[0].get("fail_count") or 0)
+
+        if success:
+            await safe_db_execute(
+                "UPDATE groups SET fail_count=0, last_fail_at=NULL WHERE group_id=%s",
+                (chat_id,)
+            )
+            return
+
+        if not is_admin:
+            fails += 1
+            if fails >= 10:
+                await safe_db_execute("DELETE FROM groups WHERE group_id=%s", (chat_id,))
+                return
+            await safe_db_execute(
+                "UPDATE groups SET fail_count=%s, last_fail_at=%s WHERE group_id=%s",
+                (fails, now_ts, chat_id)
+            )
+
+    async def send_with_optional_button(cid: int, is_group: bool):
+        nonlocal sent, attempted
+        tmp = dict(data)
+        tmp["button_url"] = button_url
+        res = await safe_send(send_content, context, cid, tmp)
+        attempted += 1
+        if res:
+            sent += 1
+            if is_group:
+                context.application.create_task(record_broadcast_result(cid, True))
+        else:
+            if is_group:
+                context.application.create_task(record_broadcast_result(cid, False))
+
+        if attempted % 50 == 0 or attempted == total:
+            await update_progress(progress_msg, attempted, total)
+
+    if target_type in ("bc_target_users", "bc_target_all"):
+        async for rows in iter_db_ids("SELECT user_id FROM users ORDER BY user_id"):
+            for r in rows:
+                await send_with_optional_button(int(r["user_id"]), is_group=False)
+
+    if target_type in ("bc_target_groups", "bc_target_all"):
+        async for rows in iter_db_ids("SELECT group_id FROM groups ORDER BY group_id"):
+            for r in rows:
+                await send_with_optional_button(int(r["group_id"]), is_group=True)
+
+    elapsed = int(time.time() - start_time)
+    try:
+        await progress_msg.edit_text(
+            "✅ <b>Broadcast Completed</b>\n\n"
+            f"📨 Sent: <b>{sent}</b>\n"
+            f"📦 Attempted: <b>{attempted}</b>\n"
+            f"⏱️ Time: <b>{elapsed // 60}m {elapsed % 60}s</b>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
 async def safe_send(func, *args, **kwargs):
     for _ in range(5):
         try:
             return await func(*args, **kwargs)
         except ChatMigrated as e:
             try:
-                ctx = args[0]
-                old_chat_id = args[1]
+                ctx = args[0]              # context
+                old_chat_id = args[1]      # chat_id
                 new_chat_id = e.new_chat_id
-                
+
+                # -------- RAM migrate/clear (consistency) --------
+                ADMIN_VERIFY_CACHE.pop(old_chat_id, None)
+                ADMIN_VERIFY_CACHE.pop(new_chat_id, None)
+
+                # ✅ migrate bot-admin cache too (keeps stats/broadcast logic consistent)
+                if old_chat_id in BOT_ADMIN_CACHE:
+                    BOT_ADMIN_CACHE.discard(old_chat_id)
+                    BOT_ADMIN_CACHE.add(new_chat_id)
+
+                if old_chat_id in ADMIN_LIST_CACHE:
+                    ADMIN_LIST_CACHE[new_chat_id] = ADMIN_LIST_CACHE.pop(old_chat_id)
+                if old_chat_id in ADMIN_LIST_CACHE_TS:
+                    ADMIN_LIST_CACHE_TS[new_chat_id] = ADMIN_LIST_CACHE_TS.pop(old_chat_id)
+
+                for (cid, uid), v in list(FORWARD_SPAM_CACHE.items()):
+                    if cid == old_chat_id:
+                        FORWARD_SPAM_CACHE[(new_chat_id, uid)] = v
+                        FORWARD_SPAM_CACHE.pop((cid, uid), None)
                 try:
                     me = await ctx.bot.get_chat_member(new_chat_id, ctx.bot.id)   
                     is_admin = me.status in ("administrator", "creator") and getattr(me, "can_delete_messages", False)
@@ -939,8 +1221,8 @@ async def safe_send(func, *args, **kwargs):
                 ctx.application.create_task(
                     safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (old_chat_id,))
                 )
-                new_args = (args[0], new_chat_id, *args[2:])
-                args = new_args
+                # retry with migrated chat_id (replace args[1])
+                args = (args[0], new_chat_id, *args[2:])
                 continue
             except Exception:
                 return None
@@ -949,96 +1231,6 @@ async def safe_send(func, *args, **kwargs):
         except (Forbidden, BadRequest):
             return None
     return None
-
-async def broadcast_target_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = PENDING_BROADCAST.pop(OWNER_ID, None)
-    if not data:
-        await query.edit_message_text("❌ Broadcast data မရှိပါ")
-        return
-
-    target_type = query.data
-    progress_msg = await query.edit_message_text(
-        "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
-        parse_mode="HTML"
-    )
-
-    sent = 0
-    attempted = 0
-    start_time = time.time()
-
-    total = 0
-    if target_type in ("bc_target_users", "bc_target_all"):
-        rows = await safe_db_execute("SELECT COUNT(*) AS c FROM users", fetch=True)
-        total += int(rows[0]["c"]) if rows else 0
-    if target_type in ("bc_target_groups", "bc_target_all"):
-        # ✅ NEW: include BOTH admin + non-admin groups
-        rows = await safe_db_execute("SELECT COUNT(*) AS c FROM groups", fetch=True)
-        total += int(rows[0]["c"]) if rows else 0
-
-    async def record_group_broadcast_result(group_id: int, ok: bool):
-        """
-        - Admin group: never delete.
-        - Non-admin group: fail_count >= 10 => auto delete from DB.
-        NOTE: single SQL to avoid race.
-        """
-        if ok:
-            await safe_db_execute(
-                "UPDATE groups SET fail_count=0 WHERE group_id=%s AND is_admin_cached=FALSE",
-                (group_id,)
-            )
-            return
-
-        now_ts = int(time.time())
-        await safe_db_execute(
-            """
-            WITH bumped AS (
-              UPDATE groups
-              SET fail_count = COALESCE(fail_count,0) + 1,
-                  last_fail_at = %s
-              WHERE group_id=%s AND is_admin_cached=FALSE
-              RETURNING fail_count
-            )
-            DELETE FROM groups
-            WHERE group_id=%s
-              AND is_admin_cached=FALSE
-              AND COALESCE(fail_count,0) >= 10
-            """,
-            (now_ts, group_id, group_id)
-        )
-
-    async def send_batch(ids, *, is_group: bool):
-        nonlocal sent, attempted
-        for cid in ids:
-            res = await safe_send(send_content, context, cid, data)
-            attempted += 1
-            if res:
-                sent += 1
-            if is_group:
-                await record_group_broadcast_result(cid, bool(res))
-            if attempted % 50 == 0 or attempted == total:
-                await update_progress(progress_msg, attempted, total)
-
-    if target_type in ("bc_target_users", "bc_target_all"):
-        async for rows in iter_db_ids("SELECT user_id FROM users ORDER BY user_id"):
-            await send_batch([r["user_id"] for r in rows], is_group=False)
-
-    if target_type in ("bc_target_groups", "bc_target_all"):
-        async for rows in iter_db_ids(
-            "SELECT group_id FROM groups ORDER BY group_id"
-        ):
-            await send_batch([r["group_id"] for r in rows], is_group=True)
-
-    elapsed = int(time.time() - start_time)
-    await progress_msg.edit_text(
-        "✅ <b>Broadcast Completed</b>\n\n"
-        f"📨 Sent: <b>{sent}</b>\n"
-        f"📦 Attempted: <b>{attempted}</b>\n"
-        f"⏱️ Time: <b>{elapsed // 60}m {elapsed % 60}s</b>",
-        parse_mode="HTML"
-    )
 
 async def broadcast_cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1049,10 +1241,18 @@ async def broadcast_cancel_handler(update: Update, context: ContextTypes.DEFAULT
         return
     await query.answer()
     PENDING_BROADCAST.pop(OWNER_ID, None)
+    PENDING_TARGET.pop(OWNER_ID, None)
+    PENDING_BUTTON_WAIT.pop(OWNER_ID, None)
     await query.edit_message_text("❌ Broadcast Cancel လုပ်လိုက်ပါပြီ")
 
 async def send_content(context, chat_id, data):
     mode = data.get("mode", "content")
+    button_url = (data.get("button_url") or "").strip()
+    reply_markup = None
+    if button_url:
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ 𝗔𝗗𝗗 𝗠𝗘 𝗧𝗢 𝗬𝗢𝗨𝗥 𝗚𝗥𝗢𝗨𝗣", url=button_url)]
+        ])
 
     # 1) forward/copy mode
     if mode in ("forward", "copy"):
@@ -1061,8 +1261,8 @@ async def send_content(context, chat_id, data):
         if not from_chat_id or not message_id:
             return None
         try:
-            override_raw = (data.get("text") or "").strip() 
-            override_text = escape(override_raw) if override_raw else ""
+            # ✅ keep raw HTML like Source bot 
+            override_text = (data.get("text") or "").strip()
             
             if mode == "forward":
                 res = await context.bot.forward_message(
@@ -1081,6 +1281,12 @@ async def send_content(context, chat_id, data):
                         )
                     except Exception:
                         pass
+                # forward_message cannot include buttons → send follow-up
+                if reply_markup:
+                    try:
+                        await context.bot.send_message(chat_id=chat_id, text="🔗", reply_markup=reply_markup)
+                    except Exception:
+                        pass
                 return res
             else:
                 # IMPORTANT:
@@ -1096,54 +1302,105 @@ async def send_content(context, chat_id, data):
                         )
                     except Exception:
                         pass
-                return await context.bot.copy_message(
+                res = await context.bot.copy_message(
                     chat_id=chat_id,
                     from_chat_id=from_chat_id,
                     message_id=message_id
                 )
-        
+                # copy_message often cannot include buttons → send follow-up
+                if reply_markup:
+                    try:
+                        await context.bot.send_message(chat_id=chat_id, text="🔗", reply_markup=reply_markup)
+                    except Exception:
+                        pass
+                return res
         except (Forbidden, BadRequest):
             return None
         except Exception:
             return None
 
     # 2) your existing "content" mode (send_photo/send_video/etc)
-    text = escape(data.get("text") or "")
+    # ✅ allow raw HTML in content mode (quote/link formatting)
+    text = (data.get("text") or "").strip()
     try:
         if data.get("photo"):
-            return await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=data["photo"],
-                caption=text if text else None,
-                parse_mode="HTML"
-            )
+            try:
+                return await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=data["photo"],
+                    caption=text if text else None,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            except BadRequest:
+                return await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=data["photo"],
+                    caption=text if text else None,
+                    reply_markup=reply_markup
+                )
         if data.get("video"):
-            return await context.bot.send_video(
-                chat_id=chat_id,
-                video=data["video"],
-                caption=text if text else None,
-                parse_mode="HTML"
-            )
+            try:
+                return await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=data["video"],
+                    caption=text if text else None,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            except BadRequest:
+                return await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=data["video"],
+                    caption=text if text else None,
+                    reply_markup=reply_markup
+                )
         if data.get("audio"):
-            return await context.bot.send_audio(
-                chat_id=chat_id,
-                audio=data["audio"],
-                caption=text if text else None,
-                parse_mode="HTML"
-            )
+            try:
+                return await context.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=data["audio"],
+                    caption=text if text else None,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            except BadRequest:
+                return await context.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=data["audio"],
+                    caption=text if text else None,
+                    reply_markup=reply_markup
+                )
         if data.get("document"):
-            return await context.bot.send_document(
-                chat_id=chat_id,
-                document=data["document"],
-                caption=text if text else None,
-                parse_mode="HTML"
-            )
+            try:
+                return await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=data["document"],
+                    caption=text if text else None,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            except BadRequest:
+                return await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=data["document"],
+                    caption=text if text else None,
+                    reply_markup=reply_markup
+                )
         if text:
-            return await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML"
-            )
+            try:
+                return await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            except BadRequest:
+                return await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup
+                )
     except (Forbidden, BadRequest):
         return None
     except Exception:
@@ -1152,41 +1409,6 @@ async def send_content(context, chat_id, data):
 # ===============================
 # CHAT MEMBER EVENTS
 # ===============================
-async def leave_if_not_admin(context: ContextTypes.DEFAULT_TYPE):
-    if not context.job or not context.job.data:
-        return
-    chat_id = context.job.data.get("chat_id")
-    if not chat_id:
-        return
-
-    try:
-        me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if me.status in ("administrator", "creator"):
-            BOT_ADMIN_CACHE.add(chat_id)
-            return
-    except:
-        pass
-
-    BOT_ADMIN_CACHE.discard(chat_id)
-    USER_ADMIN_CACHE.pop(chat_id, None)
-    REMINDER_MESSAGES.pop(chat_id, None)
-
-    context.application.create_task(
-        safe_db_execute(
-            """
-            UPDATE groups
-            SET is_admin_cached = FALSE,
-                last_checked_at = %s
-            WHERE group_id = %s
-            """,
-            (int(time.time()), chat_id)
-        )
-    )
-    context.application.create_task(
-        safe_db_execute("DELETE FROM forward_spam WHERE chat_id=%s", (chat_id,))
-    )
-    return
-
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.my_chat_member:
         return
@@ -1486,6 +1708,13 @@ async def refresh_admin_cache(app):
                 BOT_ADMIN_CACHE.add(new_id)
             USER_ADMIN_CACHE[new_id] = USER_ADMIN_CACHE.pop(gid, set())
             REMINDER_MESSAGES[new_id] = REMINDER_MESSAGES.pop(gid, [])
+
+            # ✅ migrate admin-list caches
+            if gid in ADMIN_LIST_CACHE:
+                ADMIN_LIST_CACHE[new_id] = ADMIN_LIST_CACHE.pop(gid)
+            if gid in ADMIN_LIST_CACHE_TS:
+                ADMIN_LIST_CACHE_TS[new_id] = ADMIN_LIST_CACHE_TS.pop(gid)
+            
             for (cid, uid), v in list(FORWARD_SPAM_CACHE.items()):
                 if cid == gid:
                     FORWARD_SPAM_CACHE[(new_id, uid)] = v
@@ -1606,14 +1835,18 @@ def main():
     )
     app.add_handler(CallbackQueryHandler(broadcast_confirm_handler, pattern="broadcast_confirm"))
     app.add_handler(CallbackQueryHandler(broadcast_target_handler, pattern="^bc_target_"))
+    app.add_handler(CallbackQueryHandler(broadcast_post_now_handler, pattern="^bc_post_now$"))
+    app.add_handler(CallbackQueryHandler(broadcast_auto_button_handler, pattern="^bc_btn_auto$"))
+    app.add_handler(CallbackQueryHandler(broadcast_manual_button_handler, pattern="^bc_btn_manual$"))
     app.add_handler(CallbackQueryHandler(broadcast_cancel_handler, pattern="broadcast_cancel"))
-
+    app.add_handler(MessageHandler(filters.User(OWNER_ID) & filters.TEXT & ~filters.COMMAND, broadcast_button_url_receiver))
 
     # -------------------------------
     # STARTUP HOOK (CORRECT)
     # -------------------------------
     async def on_startup(app):
         global pool
+        global DB_READY
         print("🟡 Starting bot...", flush=True)
 
         await app.bot.delete_webhook(drop_pending_updates=True)
@@ -1634,12 +1867,14 @@ def main():
                 kwargs={"prepare_threshold": None}
             )
             print("✅ DB pool created", flush=True)
+            DB_READY = True
         except Exception as e:
             print("❌ DB pool creation failed (BOT WILL CONTINUE WITHOUT DB):", e, flush=True)
             pool = None
-
+            DB_READY = False
+        
         # Only do DB-dependent startup if DB is available
-        if pool is not None:
+        if pool is not None and DB_READY:
             await init_db()
             print("✅ DB init done", flush=True)
             now = await refresh_admin_cache(app)
