@@ -59,6 +59,7 @@ REMINDER_MESSAGES: dict[int, list[int]] = {}
 PENDING_BROADCAST = {}
 PENDING_TARGET = {}
 PENDING_BUTTON_WAIT = {}
+PENDING_PREVIEW = {}   # ✅ NEW
 BOT_START_TIME = int(time.time())
 
 FORWARD_SPAM_CACHE = {}
@@ -963,11 +964,14 @@ async def broadcast_post_now_handler(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text("❌ Broadcast data မရှိပါ")
         return
 
-    progress_msg = await query.edit_message_text(
-        "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
-        parse_mode="HTML"
-    )
-    await run_broadcast(context, data, target_type, progress_msg, button_url=None)
+    # ✅ SAVE FOR PREVIEW
+    PENDING_PREVIEW[OWNER_ID] = {
+        "data": data,
+        "target": target_type,
+        "button_url": None
+    }
+
+    await show_preview(update, context)
 
 async def broadcast_auto_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -994,11 +998,13 @@ async def broadcast_auto_button_handler(update: Update, context: ContextTypes.DE
         await query.edit_message_text("❌ Broadcast data မရှိပါ")
         return
 
-    progress_msg = await query.edit_message_text(
-        "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
-        parse_mode="HTML"
-    )
-    await run_broadcast(context, data, target_type, progress_msg, button_url=url)
+    PENDING_PREVIEW[OWNER_ID] = {
+        "data": data,
+        "target": target_type,
+        "button_url": url
+    }
+
+    await show_preview(update, context)
 
 async def broadcast_manual_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1037,11 +1043,73 @@ async def broadcast_button_url_receiver(update: Update, context: ContextTypes.DE
         await msg.reply_text("❌ Broadcast data မရှိပါ")
         return
 
-    progress_msg = await msg.reply_text(
+    PENDING_PREVIEW[OWNER_ID] = {
+        "data": data,
+        "target": target_type,
+        "button_url": url
+    }
+
+    await show_preview(update, context)
+
+async def show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    chat_id = query.message.chat.id if query else update.effective_chat.id
+
+    preview = PENDING_PREVIEW.get(OWNER_ID)
+    if not preview:
+        return
+
+    data = dict(preview["data"])
+    data["button_url"] = preview["button_url"]
+
+    # ✅ SAME OUTPUT AS REAL BROADCAST
+    await send_content(context, chat_id, data)
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ SEND", callback_data="bc_preview_send"),
+            InlineKeyboardButton("❌ CANCEL", callback_data="bc_preview_cancel"),
+        ]
+    ])
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="🔍 <b>Preview</b>\n\nဒီပုံစံနဲ့ Broadcast ပို့မယ်",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+async def broadcast_preview_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    preview = PENDING_PREVIEW.pop(OWNER_ID, None)
+
+    if not preview:
+        await query.edit_message_text("❌ Broadcast data မရှိပါ")
+        return
+
+    data = preview["data"]
+    target_type = preview["target"]
+    button_url = preview["button_url"]
+
+    progress_msg = await query.edit_message_text(
         "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
         parse_mode="HTML"
     )
-    await run_broadcast(context, data, target_type, progress_msg, button_url=url)
+
+    await run_broadcast(context, data, target_type, progress_msg, button_url=button_url)
+
+async def broadcast_preview_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    PENDING_PREVIEW.pop(OWNER_ID, None)
+    PENDING_BROADCAST.pop(OWNER_ID, None)
+    PENDING_TARGET.pop(OWNER_ID, None)
+    PENDING_BUTTON_WAIT.pop(OWNER_ID, None)
+
+    await query.edit_message_text("❌ Broadcast Cancel လုပ်လိုက်ပါပြီ")
 
 async def run_broadcast(
     context: ContextTypes.DEFAULT_TYPE,
@@ -1839,6 +1907,10 @@ def main():
     app.add_handler(CallbackQueryHandler(broadcast_auto_button_handler, pattern="^bc_btn_auto$"))
     app.add_handler(CallbackQueryHandler(broadcast_manual_button_handler, pattern="^bc_btn_manual$"))
     app.add_handler(CallbackQueryHandler(broadcast_cancel_handler, pattern="broadcast_cancel"))
+
+    # ✅ PREVIEW HANDLERS
+    app.add_handler(CallbackQueryHandler(broadcast_preview_send, pattern="^bc_preview_send$"))
+    app.add_handler(CallbackQueryHandler(broadcast_preview_cancel, pattern="^bc_preview_cancel$"))
     app.add_handler(MessageHandler(filters.User(OWNER_ID) & filters.TEXT & ~filters.COMMAND, broadcast_button_url_receiver))
 
     # -------------------------------
