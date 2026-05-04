@@ -1144,7 +1144,10 @@ async def broadcast_preview_cancel(update: Update, context: ContextTypes.DEFAULT
             await context.bot.delete_message(query.message.chat.id, mid)
     PREVIEW_MESSAGE_IDS.pop(OWNER_ID, None)
 
-    await query.edit_message_text("❌ Broadcast Cancel လုပ်လိုက်ပါပြီ")
+    await context.bot.send_message(
+        chat_id=query.message.chat.id,
+        text="❌ Broadcast Cancel လုပ်လိုက်ပါပြီ"
+    )
 
 async def run_broadcast(
     context: ContextTypes.DEFAULT_TYPE,
