@@ -60,7 +60,6 @@ PENDING_BROADCAST = {}
 PENDING_TARGET = {}
 PENDING_BUTTON_WAIT = {}
 PENDING_PREVIEW = {}
-PREVIEW_MESSAGE_IDS = {}
 BOT_START_TIME = int(time.time())
 
 FORWARD_SPAM_CACHE = {}
@@ -1063,25 +1062,8 @@ async def show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = dict(preview["data"])
     data["button_url"] = preview["button_url"]
 
-    # ✅ DELETE OLD PREVIEW (anti-spam)
-    old_ids = PREVIEW_MESSAGE_IDS.get(OWNER_ID, [])
-    for mid in old_ids:
-        with contextlib.suppress(Exception):
-            await context.bot.delete_message(chat_id, mid)
-    PREVIEW_MESSAGE_IDS[OWNER_ID] = []
-
-    # 👉 preview message send (save message_id)
-    sent_msg = await send_content(context, chat_id, data)
-    if sent_msg:
-        PREVIEW_MESSAGE_IDS.setdefault(OWNER_ID, []).append(sent_msg.message_id)
-
-    # ✅ LABEL (clear preview mode)
-    label_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text="🔍 <b>PREVIEW MODE (Not sent yet)</b>",
-        parse_mode="HTML"
-    )
-    PREVIEW_MESSAGE_IDS[OWNER_ID].append(label_msg.message_id)
+    # 👉 preview message send
+    await send_content(context, chat_id, data)
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -1090,21 +1072,16 @@ async def show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
-    ctrl_msg = await context.bot.send_message(
+    await context.bot.send_message(
         chat_id=chat_id,
         text="🔍 <b>Preview</b>\n\nဒီပုံစံနဲ့ Broadcast ပို့မယ်",
         parse_mode="HTML",
         reply_markup=keyboard
     )
-    PREVIEW_MESSAGE_IDS[OWNER_ID].append(ctrl_msg.message_id)
 
 async def broadcast_preview_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    # ✅ DOUBLE SEND PROTECTION
-    if OWNER_ID not in PENDING_PREVIEW:
-        return
 
     preview = PENDING_PREVIEW.pop(OWNER_ID, None)
 
@@ -1115,12 +1092,6 @@ async def broadcast_preview_send(update: Update, context: ContextTypes.DEFAULT_T
     data = preview["data"]
     target_type = preview["target"]
     button_url = preview["button_url"]
-
-    # ✅ CLEANUP PREVIEW MESSAGES
-    for mid in PREVIEW_MESSAGE_IDS.get(OWNER_ID, []):
-        with contextlib.suppress(Exception):
-            await context.bot.delete_message(query.message.chat.id, mid)
-    PREVIEW_MESSAGE_IDS.pop(OWNER_ID, None)
 
     progress_msg = await query.edit_message_text(
         "📢 <b>Broadcasting...</b>\n\n⏳ Progress: 0%",
@@ -1137,12 +1108,6 @@ async def broadcast_preview_cancel(update: Update, context: ContextTypes.DEFAULT
     PENDING_BROADCAST.pop(OWNER_ID, None)
     PENDING_TARGET.pop(OWNER_ID, None)
     PENDING_BUTTON_WAIT.pop(OWNER_ID, None)
-
-    # ✅ CLEANUP PREVIEW MESSAGES
-    for mid in PREVIEW_MESSAGE_IDS.get(OWNER_ID, []):
-        with contextlib.suppress(Exception):
-            await context.bot.delete_message(query.message.chat.id, mid)
-    PREVIEW_MESSAGE_IDS.pop(OWNER_ID, None)
 
     await context.bot.send_message(
         chat_id=query.message.chat.id,
