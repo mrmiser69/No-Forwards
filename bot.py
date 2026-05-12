@@ -427,12 +427,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>ငါ၏လုပ်နိုင်စွမ်းကို ကောင်းကောင်းအသုံးချပါ။</b>\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📌 ငါ၏လုပ်နိုင်စွမ်း</b>\n\n"
-            "✅ Auto Forward Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
-            "✅ Spam Forward Mute ( Forward 3 ခါ လုပ်ရင် 10 မိနစ် Auto Mute ပေး။ )\n\n"
+            "<blockquote>"
+            "<b>✅ Auto Forward Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )</b>\n"
+            "<b>✅ Spam Forward Mute ( Forward 3 ခါ လုပ်ရင် 10 မိနစ် Auto Mute ပေး။ )</b>"
+            "</blockquote>\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📥 ငါ့ကိုအသုံးပြုရန်</b>\n\n"
-            "➕ ငါ့ကို Group ထဲထည့်ပါ\n"
-            "⭐️ ငါ့ကို Admin ပေးပါ"
+            "<blockquote>"
+            "<b>➊ ငါ့ကို Group ထဲထည့်ပါ</b>\n"
+            "<b>➋ ငါ့ကို Admin ပေးပါ</b>"
+            "</blockquote>"
         )
 
         buttons = []
@@ -443,7 +447,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ])
-        buttons.append([InlineKeyboardButton("🤍 DONATE US 🤍", callback_data="donate_menu")])
+        buttons.append([InlineKeyboardButton("🤍 𝗗𝗢𝗡𝗔𝗧𝗘 𝗨𝗦 🤍", callback_data="donate_menu")])
         buttons.append([
             InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
             InlineKeyboardButton("📢 𝐂𝐡𝐚𝐧𝐧𝐞𝐥", url="https://t.me/MMTelegramBotss"),
@@ -528,7 +532,7 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⭐️ 𝗦𝗨𝗣𝗣𝗢𝗥𝗧 𝗕𝗢𝗧 (5 Stars)", callback_data="donate_stars_5")],
             [InlineKeyboardButton("🪙 𝗦𝗨𝗣𝗣𝗢𝗥𝗧 𝗗𝗘𝗩𝗘𝗟𝗢𝗣𝗘𝗥 (TON)", callback_data="donate_ton")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="donate_back_start")],
+            [InlineKeyboardButton("⬅️ 𝐁𝐚𝐜𝐤", callback_data="donate_back_start")],
         ])
         await query.message.edit_caption(caption=donate_text, parse_mode="HTML", reply_markup=kb)
         return
@@ -548,12 +552,16 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>ငါ၏လုပ်နိုင်စွမ်းကို ကောင်းကောင်းအသုံးချပါ။</b>\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📌 ငါ၏လုပ်နိုင်စွမ်း</b>\n\n"
-            "✅ Auto Forward Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )\n"
-            "✅ Spam Forward Mute ( Forward 3 ခါ လုပ်ရင် 10 မိနစ် Auto Mute ပေး။ )\n\n"
+            "<blockquote>"
+            "<b>✅ Auto Forward Delete ( Setting ချိန်းစရာမလိုပဲ ချက်ချင်း အလုပ်လုပ်။ )</b>\n"
+            "<b>✅ Spam Forward Mute ( Forward 3 ခါ လုပ်ရင် 10 မိနစ် Auto Mute ပေး။ )</b>"
+            "</blockquote>\n\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
             "<b>📥 ငါ့ကိုအသုံးပြုရန်</b>\n\n"
-            "➕ ငါ့ကို Group ထဲထည့်ပါ\n"
-            "⭐️ ငါ့ကို Admin ပေးပါ"
+            "<blockquote>"
+            "<b>➊ ငါ့ကို Group ထဲထည့်ပါ</b>\n"
+            "<b>➋ ငါ့ကို Admin ပေးပါ</b>"
+            "</blockquote>"
         )
         buttons = []
         if bot_username:
@@ -563,7 +571,7 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url=f"https://t.me/{bot_username}?startgroup=true"
                 )
             ])
-        buttons.append([InlineKeyboardButton("🤍 DONATE US 🤍", callback_data="donate_menu")])
+        buttons.append([InlineKeyboardButton("🤍 𝗗𝗢𝗡𝗔𝗧𝗘 𝗨𝗦 🤍", callback_data="donate_menu")])
         buttons.append([
             InlineKeyboardButton("👨‍💻 𝐃𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐫", url="tg://user?id=5942810488"),
             InlineKeyboardButton("📢 𝐂𝐡𝐚𝐧𝐧𝐞𝐥", url="https://t.me/MMTelegramBotss"),
@@ -578,10 +586,12 @@ async def donate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ton_text = (
             "<b>🪙 Support Developer (TON)</b>\n\n"
             f"<b>TON Address:</b>\n<code>{escape(TON_ADDRESS)}</code>\n\n"
-            "✅ Address ကို copy လုပ်ပြီး TON coin ပေးပို့နိုင်ပါတယ်ဗျ။\n"
-            "💙 Thank You For Supporting !"
+            "<blockquote>"
+            "<b>✅ Address ကို copy လုပ်ပြီး TON coin ပေးပို့နိုင်ပါတယ်ဗျ။</b>"
+            "</blockquote>\n"
+            "<b>❤️ Thank You For Supporting !</b>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="donate_menu")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 𝐁𝐚𝐜𝐤", callback_data="donate_menu")]])
         await query.message.edit_caption(caption=ton_text, parse_mode="HTML", reply_markup=kb)
         return
 
